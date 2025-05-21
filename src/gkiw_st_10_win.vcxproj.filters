@@ -24,10 +24,16 @@
     <ClInclude Include="shaderprogram.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
-	<ClInclude Include="myCube.h">
+    <ClInclude Include="myCube.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
-	<ClInclude Include="myTeapot.h">
+    <ClInclude Include="myTeapot.h">
+      <Filter>Pliki nagłówkowe</Filter>
+    </ClInclude>
+    <ClInclude Include="tiny_obj_loader.h">
+      <Filter>Pliki nagłówkowe</Filter>
+    </ClInclude>
+    <ClInclude Include="physics.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
   </ItemGroup>
@@ -41,12 +47,15 @@
     <ClCompile Include="shaderprogram.cpp">
       <Filter>Pliki źródłowe</Filter>
     </ClCompile>
+    <ClCompile Include="physics.cpp">
+      <Filter>Pliki źródłowe</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="f_simplest.glsl">
       <Filter>Pliki zasobów</Filter>
     </None>
-	<None Include="v_simplest.glsl">
+    <None Include="v_simplest.glsl">
       <Filter>Pliki zasobów</Filter>
     </None>
   </ItemGroup>

@@ -1,236 +1,268 @@
-/*
-Niniejszy program jest wolnym oprogramowaniem; możesz go
-rozprowadzać dalej i / lub modyfikować na warunkach Powszechnej
-Licencji Publicznej GNU, wydanej przez Fundację Wolnego
-Oprogramowania - według wersji 2 tej Licencji lub(według twojego
-wyboru) którejś z późniejszych wersji.
-
-Niniejszy program rozpowszechniany jest z nadzieją, iż będzie on
-użyteczny - jednak BEZ JAKIEJKOLWIEK GWARANCJI, nawet domyślnej
-gwarancji PRZYDATNOŚCI HANDLOWEJ albo PRZYDATNOŚCI DO OKREŚLONYCH
-ZASTOSOWAŃ.W celu uzyskania bliższych informacji sięgnij do
-Powszechnej Licencji Publicznej GNU.
-
-Z pewnością wraz z niniejszym programem otrzymałeś też egzemplarz
-Powszechnej Licencji Publicznej GNU(GNU General Public License);
-jeśli nie - napisz do Free Software Foundation, Inc., 59 Temple
-Place, Fifth Floor, Boston, MA  02110 - 1301  USA
-*/
-
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_SWIZZLE
+#define TINYOBJLOADER_IMPLEMENTATION
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <stdlib.h>
-#include <stdio.h>
+#include <glm/gtc/type_ptr.hpp>
+#include <tiny_obj_loader.h>
 #include "constants.h"
 #include "lodepng.h"
 #include "shaderprogram.h"
-#include "myCube.h"
-#include "myTeapot.h"
+#include "physics.h"
 
-float speed_x=0;
-float speed_y=0;
-float aspectRatio=1;
+#include <vector>
+#include <string>
+#include <iostream>
+#include <unordered_map>
 
-ShaderProgram *sp;
-GLuint tex0, tex1;
-
-//Odkomentuj, żeby rysować kostkę
-//float* vertices = myCubeVertices;
-//float* normals = myCubeNormals;
-//float* texCoords = myCubeTexCoords;
-//float* colors = myCubeColors;
-//int vertexCount = myCubeVertexCount;
+float speed_x = 0, speed_y = 0;
+float aspectRatio = 1;
 
 
-//Odkomentuj, żeby rysować czajnik
-float* vertices = myTeapotVertices;
-float* normals = myTeapotVertexNormals;
-float* texCoords = myTeapotTexCoords;
-float* colors = myTeapotColors;
-int vertexCount = myTeapotVertexCount;
+std::vector<std::vector<float>>  vertsPerMat;
+std::vector<std::vector<float>>  normsPerMat;
+std::vector<std::vector<float>>  uvsPerMat;
+std::vector<int>                 countsPerMat;
+
+std::vector<tinyobj::material_t> materials;
+std::vector<GLuint>              matTexIDs;
+
+GLuint metalTex, skyTex;
+
+ShaderProgram* sp = nullptr;
+
+AirplaneState airplane = { glm::vec3(0,0,0), glm::vec3(0,0,0), 0,0,0, 2.0f };
 
 
+void error_callback(int e, const char* d) { std::cerr << "GLFW Error: " << d << "\n"; }
 
-//Procedura obsługi błędów
-void error_callback(int error, const char* description) {
-	fputs(description, stderr);
+
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+	if (action == GLFW_PRESS) {
+		if (key == GLFW_KEY_LEFT) speed_y = -PI / 2;
+		if (key == GLFW_KEY_RIGHT) speed_y = PI / 2;
+		if (key == GLFW_KEY_UP) speed_x = PI / 2;
+		if (key == GLFW_KEY_DOWN) speed_x = -PI / 2;
+	}
+	if (action == GLFW_RELEASE) {
+		if (key == GLFW_KEY_LEFT) speed_y = 0;
+		if (key == GLFW_KEY_RIGHT) speed_y = 0;
+		if (key == GLFW_KEY_UP) speed_x = 0;
+		if (key == GLFW_KEY_DOWN) speed_x = 0;
+	}
 }
 
 
-void keyCallback(GLFWwindow* window,int key,int scancode,int action,int mods) {
-    if (action==GLFW_PRESS) {
-        if (key==GLFW_KEY_LEFT) speed_x=-PI/2;
-        if (key==GLFW_KEY_RIGHT) speed_x=PI/2;
-        if (key==GLFW_KEY_UP) speed_y=PI/2;
-        if (key==GLFW_KEY_DOWN) speed_y=-PI/2;
-    }
-    if (action==GLFW_RELEASE) {
-        if (key==GLFW_KEY_LEFT) speed_x=0;
-        if (key==GLFW_KEY_RIGHT) speed_x=0;
-        if (key==GLFW_KEY_UP) speed_y=0;
-        if (key==GLFW_KEY_DOWN) speed_y=0;
-    }
+void windowResizeCallback(GLFWwindow* w, int width, int height) {
+	if (height == 0) return;
+	aspectRatio = float(width) / float(height);
+	glViewport(0, 0, width, height);
 }
 
-void windowResizeCallback(GLFWwindow* window,int width,int height) {
-    if (height==0) return;
-    aspectRatio=(float)width/(float)height;
-    glViewport(0,0,width,height);
-}
-
-GLuint readTexture(const char* filename) {
+GLuint readTexture(const std::string& fname) {
+	std::vector<unsigned char> img;
+	unsigned w, h;
+	auto err = lodepng::decode(img, w, h, fname);
+	if (err) { std::cerr << "PNG decode error " << err << ": " << lodepng_error_text(err) << "\n"; return 0; }
 	GLuint tex;
-	glActiveTexture(GL_TEXTURE0);
-	//Wczytanie do pamięci komputera
-	std::vector<unsigned char> image; //Alokuj wektor do wczytania obrazka
-	unsigned width, height; //Zmienne do których wczytamy wymiary obrazka
-	//Wczytaj obrazek
-	unsigned error = lodepng::decode(image, width, height, filename);
-	//Import do pamięci karty graficznej
-	glGenTextures(1, &tex); //Zainicjuj jeden uchwyt
-	glBindTexture(GL_TEXTURE_2D, tex); //Uaktywnij uchwyt
-	//Wczytaj obrazek do pamięci KG skojarzonej z uchwytem
-	glTexImage2D(GL_TEXTURE_2D, 0, 4, width, height, 0,
-		GL_RGBA, GL_UNSIGNED_BYTE, (unsigned char*)image.data());
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	return tex;
 }
 
-//Procedura inicjująca
-void initOpenGLProgram(GLFWwindow* window) {
-	//************Tutaj umieszczaj kod, który należy wykonać raz, na początku programu************
-	glClearColor(0,0,0,1);
+
+bool loadModel(const std::string& objFile) {
+	tinyobj::attrib_t                attrib;
+	std::vector<tinyobj::shape_t>    shapes;
+	std::string warn, err;
+
+	bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, objFile.c_str(), ".");
+	if (!warn.empty()) std::cerr << "WARN: " << warn << "\n";
+	if (!err.empty())  std::cerr << "ERR : " << err << "\n";
+	if (!ret) return false;
+
+	int M = (int)materials.size();
+	vertsPerMat.assign(M, {});
+	normsPerMat.assign(M, {});
+	uvsPerMat.assign(M, {});
+	countsPerMat.assign(M, 0);
+
+	for (auto& shape : shapes) {
+		size_t index_offset = 0;
+		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
+			int fv = shape.mesh.num_face_vertices[f];
+			int matID = shape.mesh.material_ids[f];
+			for (int v = 0; v < fv; v++) {
+				auto idx = shape.mesh.indices[index_offset + v];
+
+				vertsPerMat[matID].push_back(attrib.vertices[3 * idx.vertex_index + 0]);
+				vertsPerMat[matID].push_back(attrib.vertices[3 * idx.vertex_index + 1]);
+				vertsPerMat[matID].push_back(attrib.vertices[3 * idx.vertex_index + 2]);
+				vertsPerMat[matID].push_back(1.0f);
+
+				if (idx.normal_index >= 0) {
+					normsPerMat[matID].push_back(attrib.normals[3 * idx.normal_index + 0]);
+					normsPerMat[matID].push_back(attrib.normals[3 * idx.normal_index + 1]);
+					normsPerMat[matID].push_back(attrib.normals[3 * idx.normal_index + 2]);
+					normsPerMat[matID].push_back(0.0f);
+				}
+				else {
+					normsPerMat[matID].insert(normsPerMat[matID].end(), { 0,1,0,0 });
+				}
+
+				if (idx.texcoord_index >= 0) {
+					uvsPerMat[matID].push_back(attrib.texcoords[2 * idx.texcoord_index + 0]);
+					uvsPerMat[matID].push_back(attrib.texcoords[2 * idx.texcoord_index + 1]);
+				}
+				else {
+					uvsPerMat[matID].insert(uvsPerMat[matID].end(), { 0,0 });
+				}
+				countsPerMat[matID] += 1;
+			}
+			index_offset += fv;
+		}
+	}
+	return true;
+}
+
+bool initOpenGLProgram(GLFWwindow* window) {
+	glClearColor(0.15f, 0.15f, 0.25f, 1);
 	glEnable(GL_DEPTH_TEST);
-	glfwSetWindowSizeCallback(window,windowResizeCallback);
-	glfwSetKeyCallback(window,keyCallback);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	tex0 = readTexture("metal.png");
-	tex1 = readTexture("sky.png");
+	glfwSetWindowSizeCallback(window, windowResizeCallback);
+	glfwSetKeyCallback(window, keyCallback);
 
-	sp=new ShaderProgram("v_simplest.glsl",NULL,"f_simplest.glsl");
+	if (!loadModel("jetanima.obj")) { std::cerr << "Failed to load model\n"; return false; }
+
+	matTexIDs.resize(materials.size(), 0);
+	for (size_t i = 0; i < materials.size(); i++) {
+		std::string texname = materials[i].diffuse_texname;
+
+		// Cut path (Windows/Linux)
+		auto pos = texname.find_last_of("/\\");
+		if (pos != std::string::npos) texname = texname.substr(pos + 1);
+
+		if (texname.empty()) {
+			if (materials[i].name == "cam")            texname = "atlasjet-black.png"; // окно
+			else if (materials[i].name == "kantuc")    texname = "wide.png";
+			else if (materials[i].name == "uçak")      texname = "atlasjet-white.png";
+			else if (materials[i].name == "uçak.001")  texname = "atlasjet-black.png";
+			else if (materials[i].name == "motor")     texname = "metal.jpg";
+			else if (materials[i].name == "motor_red") texname = "metal.jpg";
+			else if (materials[i].name == "matel")     texname = "metal.jpg";
+			else texname = "";
+		}
+
+		GLuint texID = 0;
+		//if (!texname.empty()) texID = readTexture(texname);
+
+		if (!texname.empty()) {
+			std::cout << "Trying to load texture: " << texname << std::endl;
+			texID = readTexture(texname);
+		}
+		matTexIDs[i] = texID;
+
+		std::cout << "Mat[" << i << "][" << materials[i].name << "] -> " << texname << " id=" << texID << "\n";
+	}
+
+	metalTex = readTexture("metal.jpg");
+	//skyTex = readTexture("sky.png");
+
+	sp = new ShaderProgram("v_simplest.glsl", nullptr, "f_simplest.glsl");
+	//sp = new ShaderProgram("v_texture.glsl", nullptr, "f_texture.glsl");
+	return true;
 }
 
-
-//Zwolnienie zasobów zajętych przez program
-void freeOpenGLProgram(GLFWwindow* window) {
-    //************Tutaj umieszczaj kod, który należy wykonać po zakończeniu pętli głównej************
-
-    delete sp;
+void freeOpenGLProgram(GLFWwindow* w) {
+	delete sp;
 }
 
-
-
-
-//Procedura rysująca zawartość sceny
-void drawScene(GLFWwindow* window,float angle_x,float angle_y) {
-	//************Tutaj umieszczaj kod rysujący obraz******************l
+void drawScene(GLFWwindow* window, float angle_x, float angle_y) {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	glm::mat4 V=glm::lookAt(
-         glm::vec3(0, 0, -3),
-         glm::vec3(0,0,0),
-         glm::vec3(0.0f,1.0f,0.0f)); //Wylicz macierz widoku
+	glm::mat4 V = glm::lookAt(
+		glm::vec3(0, 0, -12),
+		glm::vec3(0, 0, 0),
+		glm::vec3(0, 1, 0)
+	);
+	glm::mat4 P = glm::perspective(
+		glm::radians(45.0f),
+		aspectRatio, 0.1f, 200.0f
+	);
+	glm::mat4 M(1.0f);
+	M = glm::rotate(M, angle_y, glm::vec3(1, 0, 0));
+	M = glm::rotate(M, angle_x, glm::vec3(0, 1, 0));
 
-    glm::mat4 P=glm::perspective(50.0f*PI/180.0f, aspectRatio, 0.01f, 50.0f); //Wylicz macierz rzutowania
+	sp->use();
+	glUniformMatrix4fv(sp->u("P"), 1, GL_FALSE, glm::value_ptr(P));
+	glUniformMatrix4fv(sp->u("V"), 1, GL_FALSE, glm::value_ptr(V));
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
+	glUniform4f(sp->u("lp"), 10.0f, 10.0f, 0.0f, 1.0f);
 
-    glm::mat4 M=glm::mat4(1.0f);
-	M=glm::rotate(M,angle_y,glm::vec3(1.0f,0.0f,0.0f)); //Wylicz macierz modelu
-	M=glm::rotate(M,angle_x,glm::vec3(0.0f,1.0f,0.0f)); //Wylicz macierz modelu
 
-    sp->use();//Aktywacja programu cieniującego
-    //Przeslij parametry programu cieniującego do karty graficznej
-    glUniformMatrix4fv(sp->u("P"),1,false,glm::value_ptr(P));
-    glUniformMatrix4fv(sp->u("V"),1,false,glm::value_ptr(V));
-    glUniformMatrix4fv(sp->u("M"),1,false,glm::value_ptr(M));
-	glUniform4f(sp->u("lp"), 0, 0, -6, 1);
+	for (size_t m = 0; m < materials.size(); m++) {
+		GLuint tex = matTexIDs[m];
 
-	//W drawScene
-	glUniform1i(sp->u("textureMap0"), 0); //drawScene
-	//Przed glDrawArrays w drawScene
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, tex0);
-	glEnableVertexAttribArray(sp->a("texCoord0"));
-	glVertexAttribPointer(sp->a("texCoord0"), 2, GL_FLOAT, false, 0, texCoords);//odpowiednia tablica
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		glUniform1i(sp->u("textureMap0"), 0);
 
-	//W drawScene
-	glUniform1i(sp->u("textureMap1"), 1); //drawScene
-	//Uaktywnij pierwszą jednostkę teksturującą
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, tex1);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, metalTex);
+		glUniform1i(sp->u("textureMap1"), 1);
 
-    glEnableVertexAttribArray(sp->a("vertex"));  //Włącz przesyłanie danych do atrybutu vertex
-    glVertexAttribPointer(sp->a("vertex"),4,GL_FLOAT,false,0,vertices); //Wskaż tablicę z danymi dla atrybutu vertex
+		// далее - всё как есть
+		glEnableVertexAttribArray(sp->a("vertex"));
+		glVertexAttribPointer(sp->a("vertex"), 4, GL_FLOAT, GL_FALSE, 0, vertsPerMat[m].data());
 
-	glEnableVertexAttribArray(sp->a("color"));  //Włącz przesyłanie danych do atrybutu color
-	glVertexAttribPointer(sp->a("color"), 4, GL_FLOAT, false, 0, colors); //Wskaż tablicę z danymi dla atrybutu color
+		glEnableVertexAttribArray(sp->a("normal"));
+		glVertexAttribPointer(sp->a("normal"), 4, GL_FLOAT, GL_FALSE, 0, normsPerMat[m].data());
 
-	glEnableVertexAttribArray(sp->a("normal"));  //Włącz przesyłanie danych do atrybutu normal
-	glVertexAttribPointer(sp->a("normal"), 4, GL_FLOAT, false, 0, normals); //Wskaż tablicę z danymi dla atrybutu normal
+		glEnableVertexAttribArray(sp->a("texCoord0"));
+		glVertexAttribPointer(sp->a("texCoord0"), 2, GL_FLOAT, GL_FALSE, 0, uvsPerMat[m].data());
 
-    glDrawArrays(GL_TRIANGLES,0,vertexCount); //Narysuj obiekt
+		glDrawArrays(GL_TRIANGLES, 0, countsPerMat[m]);
 
-    glDisableVertexAttribArray(sp->a("vertex"));  //Wyłącz przesyłanie danych do atrybutu vertex
-	glDisableVertexAttribArray(sp->a("color"));  //Wyłącz przesyłanie danych do atrybutu color
-	glDisableVertexAttribArray(sp->a("normal"));  //Wyłącz przesyłanie danych do atrybutu normal
-	glDisableVertexAttribArray(sp->a("texCoord0"));
+		glDisableVertexAttribArray(sp->a("vertex"));
+		glDisableVertexAttribArray(sp->a("normal"));
+		glDisableVertexAttribArray(sp->a("texCoord0"));
+	}
 
-    glfwSwapBuffers(window); //Przerzuć tylny bufor na przedni
+	glfwSwapBuffers(window);
 }
 
+int main() {
+	glfwSetErrorCallback(error_callback);
+	if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
+	GLFWwindow* w = glfwCreateWindow(800, 600, "Jet", nullptr, nullptr);
+	if (!w) { glfwTerminate();return 1; }
+	glfwMakeContextCurrent(w);
+	glfwSwapInterval(1);
+	if (glewInit() != GLEW_OK) { std::cerr << "GLEW init failed\n";return 1; }
 
-int main(void)
-{
-	GLFWwindow* window; //Wskaźnik na obiekt reprezentujący okno
+	if (!initOpenGLProgram(w)) return 1;
 
-	glfwSetErrorCallback(error_callback);//Zarejestruj procedurę obsługi błędów
-
-	if (!glfwInit()) { //Zainicjuj bibliotekę GLFW
-		fprintf(stderr, "Nie można zainicjować GLFW.\n");
-		exit(EXIT_FAILURE);
+	float ax = 0, ay = 0;
+	glfwSetTime(0);
+	while (!glfwWindowShouldClose(w)) {
+		float pitchInput = 0, yawInput = 0, rollInput = 0, throttleInput = 0;
+		ax += speed_x * glfwGetTime();
+		ay += speed_y * glfwGetTime();
+		float dt = glfwGetTime();
+		glfwSetTime(0);
+		drawScene(w, ay, ax);
+		glfwPollEvents();
 	}
-
-	window = glfwCreateWindow(500, 500, "OpenGL", NULL, NULL);  //Utwórz okno 500x500 o tytule "OpenGL" i kontekst OpenGL.
-
-	if (!window) //Jeżeli okna nie udało się utworzyć, to zamknij program
-	{
-		fprintf(stderr, "Nie można utworzyć okna.\n");
-		glfwTerminate();
-		exit(EXIT_FAILURE);
-	}
-
-	glfwMakeContextCurrent(window); //Od tego momentu kontekst okna staje się aktywny i polecenia OpenGL będą dotyczyć właśnie jego.
-	glfwSwapInterval(1); //Czekaj na 1 powrót plamki przed pokazaniem ukrytego bufora
-
-	if (glewInit() != GLEW_OK) { //Zainicjuj bibliotekę GLEW
-		fprintf(stderr, "Nie można zainicjować GLEW.\n");
-		exit(EXIT_FAILURE);
-	}
-
-	initOpenGLProgram(window); //Operacje inicjujące
-
-	//Główna pętla
-	float angle_x=0; //Aktualny kąt obrotu obiektu
-	float angle_y=0; //Aktualny kąt obrotu obiektu
-	glfwSetTime(0); //Zeruj timer
-	while (!glfwWindowShouldClose(window)) //Tak długo jak okno nie powinno zostać zamknięte
-	{
-        angle_x+=speed_x*glfwGetTime(); //Zwiększ/zmniejsz kąt obrotu na podstawie prędkości i czasu jaki upłynał od poprzedniej klatki
-        angle_y+=speed_y*glfwGetTime(); //Zwiększ/zmniejsz kąt obrotu na podstawie prędkości i czasu jaki upłynał od poprzedniej klatki
-        glfwSetTime(0); //Zeruj timer
-		drawScene(window,angle_x,angle_y); //Wykonaj procedurę rysującą
-		glfwPollEvents(); //Wykonaj procedury callback w zalezności od zdarzeń jakie zaszły.
-	}
-
-	freeOpenGLProgram(window);
-
-	glfwDestroyWindow(window); //Usuń kontekst OpenGL i okno
-	glfwTerminate(); //Zwolnij zasoby zajęte przez GLFW
-	exit(EXIT_SUCCESS);
+	freeOpenGLProgram(w);
+	glfwDestroyWindow(w);
+	glfwTerminate();
+	return 0;
 }

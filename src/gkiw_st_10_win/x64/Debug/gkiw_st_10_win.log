@@ -1,0 +1,5 @@
+﻿  main_file.cpp
+D:\UNIVERSITY\sem4\Grafika Komputerowa\src\main_file.cpp(257,17): warning C4244: '+=': conversion from 'double' to 'float', possible loss of data
+D:\UNIVERSITY\sem4\Grafika Komputerowa\src\main_file.cpp(258,17): warning C4244: '+=': conversion from 'double' to 'float', possible loss of data
+D:\UNIVERSITY\sem4\Grafika Komputerowa\src\main_file.cpp(259,12): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+  gkiw_st_10_win.vcxproj -> D:\UNIVERSITY\sem4\Grafika Komputerowa\src\x64\Debug\gkiw_st_10_win.exe
