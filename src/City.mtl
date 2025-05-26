@@ -1,0 +1,75 @@
+# Blender 3.6.2 MTL File: 'City.blend'
+# www.blender.org
+
+newmtl Material.004
+Kd 0.800000 0.104087 0.160364
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+map_Kd TexturesCom_ConcreteBare0321_1_seamless_S.png
+
+# Grass
+newmtl Material.006
+Kd 0.2 0.5 0.2
+Ks 0.0 0.0 0.0
+Ke 0.0 0.0 0.0
+Ni 1.0
+d 1.0
+illum 1
+
+# Water
+newmtl Material.007
+Kd 0.0 0.2 0.4
+Ks 0.8 0.9 1.0
+Ke 0.0 0.0 0.0
+Ni 1.333
+d 0.8
+illum 2
+
+newmtl build3
+Kd 0.000000 0.519307 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+map_Kd TexturesCom_BuildingsHighRise0530_1_seamless_S.png
+
+newmtl build3.001
+Kd 0.924094 0.135487 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+map_Kd TexturesCom_HighRiseResidential0144_1_seamless_S.png
+
+newmtl build3.002
+Kd 1.000000 0.129941 0.058277
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+map_Kd TexturesCom_HighRiseResidential0103_1_seamless_S.png
+
+newmtl wall
+Kd 0.979403 1.000000 0.096602
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+Pr 0.500000
+Pm 0.000000
+map_Kd TexturesCom_HighRiseResidential0139_1_seamless_S.png
