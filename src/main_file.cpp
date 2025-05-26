@@ -11,7 +11,6 @@
 #include "constants.h"
 #include "lodepng.h"
 #include "shaderprogram.h"
-#include "physics.h"
 
 #include <iostream>
 #include <vector>
@@ -20,7 +19,25 @@
 
 ShaderProgram* sp = nullptr;
 
-float speed_x = 0, speed_y = 0;
+struct AirplaneState {
+	glm::vec3 pos;
+	float yaw, pitch;
+	float speed;
+};
+
+AirplaneState airplane = { glm::vec3(0, 40, 0), 0.0f, 0.0f, 10.0f };
+float yawRate = 0.0f;
+float pitchRate = 0.0f;
+float targetYawRate = 0.0f;
+float currentYawRate = 0.0f;
+const float yawAccel = glm::radians(180.0f);
+
+float currentRollAngle = 0.0f;
+const float rollAccel = glm::radians(60.0f);
+
+const float MIN_X = -500, MAX_X = 500;
+const float MIN_Z = -500, MAX_Z = 500;
+
 float aspectRatio = 1;
 
 void freeOpenGLProgram(GLFWwindow* w) {
@@ -32,17 +49,17 @@ void error_callback(int e, const char* d) {
 }
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+	const float ANG_V = glm::radians(45.0f); // angular speed in radians/sec
+
 	if (action == GLFW_PRESS) {
-		if (key == GLFW_KEY_LEFT) speed_y = -PI / 2;
-		if (key == GLFW_KEY_RIGHT) speed_y = PI / 2;
-		if (key == GLFW_KEY_UP) speed_x = PI / 2;
-		if (key == GLFW_KEY_DOWN) speed_x = -PI / 2;
+		if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_V;  // bank left
+		if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_V;  // bank right
+		if (key == GLFW_KEY_DOWN)   pitchRate = -ANG_V;  // ↓ nose up (climb)
+		if (key == GLFW_KEY_UP)     pitchRate = ANG_V;  // ↑ nose down (descend)
 	}
-	if (action == GLFW_RELEASE) {
-		if (key == GLFW_KEY_LEFT) speed_y = 0;
-		if (key == GLFW_KEY_RIGHT) speed_y = 0;
-		if (key == GLFW_KEY_UP) speed_x = 0;
-		if (key == GLFW_KEY_DOWN) speed_x = 0;
+	else if (action == GLFW_RELEASE) {
+		if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) targetYawRate = 0.0f;
+		if (key == GLFW_KEY_DOWN || key == GLFW_KEY_UP)    pitchRate = 0.0f;
 	}
 }
 
@@ -92,7 +109,6 @@ GLuint makeColorTexture(float r, float g, float b, float a = 1.0f) {
 
 
 // Globalne zmienne:
-AirplaneState airplane = { glm::vec3(0,0,0), glm::vec3(0,0,0), 0,0,0, 2.0f };
 std::vector<std::vector<float>> vertsPerMatJet, normsPerMatJet, uvsPerMatJet;
 std::vector<int> countsPerMatJet;
 std::vector<tinyobj::material_t> materialsJet;
@@ -225,6 +241,48 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	return true;
 }
 
+
+void updatePhysics(float dt) {
+	// 1) Smooth yawRate
+	float diff = targetYawRate - currentYawRate;
+	float maxStep = yawAccel * dt;
+	diff = glm::clamp(diff, -maxStep, maxStep);
+	currentYawRate += diff;
+
+	// 2) Apply to heading
+	airplane.yaw += currentYawRate * dt;
+
+	// 3) Clamp pitch as before
+	airplane.pitch += pitchRate * dt;
+	airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-45.0f), glm::radians(45.0f));
+
+	// 4) Desired roll based on currentYawRate
+	float desiredRoll = glm::clamp(-currentYawRate * 0.5f,
+		glm::radians(-30.0f),
+		glm::radians(30.0f));
+	// 5) Smooth rollAngle
+	float rollDiff = desiredRoll - currentRollAngle;
+	float maxRollStep = rollAccel * dt;
+	rollDiff = glm::clamp(rollDiff, -maxRollStep, maxRollStep);
+	currentRollAngle += rollDiff;
+
+	// 6) Build rotation matrix with smooth roll
+	glm::mat4 R(1.0f);
+	R = glm::rotate(R, airplane.yaw, glm::vec3(0, 1, 0));
+	R = glm::rotate(R, airplane.pitch, glm::vec3(1, 0, 0));
+	R = glm::rotate(R, currentRollAngle, glm::vec3(0, 0, 1));
+
+	// 7) Move forward
+	glm::vec3 forward = glm::normalize(glm::vec3(R * glm::vec4(0, 0, 1, 0)));
+	airplane.pos += forward * (airplane.speed * dt);
+
+	// 8) Clamp position...
+	airplane.pos.x = glm::clamp(airplane.pos.x, MIN_X, MAX_X);
+	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z, MAX_Z);
+	airplane.pos.y = glm::clamp(airplane.pos.y, 10.0f, 500.0f);
+}
+
+
 void drawModel(
 	const std::vector<std::vector<float>>& vertsPerMat,
 	const std::vector<std::vector<float>>& normsPerMat,
@@ -255,31 +313,53 @@ void drawModel(
 	}
 }
 
-void drawScene(GLFWwindow* window, float angle_x, float angle_y) {
+void drawScene(GLFWwindow* window) {
 	glClearColor(0.2f, 0.5f, 1.0f, 1.0f); // Niebo
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	glm::vec3 camPos(0.0f, 100.0f, 190.0f);
-	glm::mat4 V = glm::lookAt(camPos, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
-	glm::mat4 P = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
+	glm::mat4 R(1.0f);
+	R = glm::rotate(R, airplane.yaw, glm::vec3(0, 1, 0));
+	R = glm::rotate(R, airplane.pitch, glm::vec3(1, 0, 0));
+	float rollAngle = glm::clamp(-yawRate * 0.5f,
+		glm::radians(-30.0f),
+		glm::radians(30.0f));
+	R = glm::rotate(R, rollAngle, glm::vec3(0, 0, 1));
 
-	glm::mat4 M_rot(1.0f), M_identity(1.0f);
-	M_rot = glm::translate(M_rot, glm::vec3(0, 40, 0));
-	M_rot = glm::rotate(M_rot, angle_y, glm::vec3(1, 0, 0));
-	M_rot = glm::rotate(M_rot, angle_x, glm::vec3(0, 1, 0));
+	// model matrix for the airplane
+	glm::mat4 M = glm::translate(glm::mat4(1.0f), airplane.pos)
+		* glm::rotate(glm::mat4(1.0f), airplane.yaw, glm::vec3(0, 1, 0))
+		* glm::rotate(glm::mat4(1.0f), airplane.pitch, glm::vec3(1, 0, 0))
+		* glm::rotate(glm::mat4(1.0f), currentRollAngle, glm::vec3(0, 0, 1));
+
+	// recalc forward (−Z) after rotation
+	glm::vec3 forward = glm::normalize(glm::vec3(R * glm::vec4(0, 0, 1, 0)));
+	glm::vec3 worldUp = glm::vec3(0, 1, 0);
+
+	// place camera behind & above the plane
+	glm::vec3 camPos = airplane.pos - forward * 12.0f + worldUp * 4.0f;
+
+	glm::mat4 V = glm::lookAt(camPos, airplane.pos, worldUp);
+	glm::mat4 P = glm::perspective(glm::radians(60.0f),
+		aspectRatio,
+		0.1f, 2000.0f);
+
+	glUniform4f(sp->u("lp"), -1.0f, 1.0f, -0.5f, 0.0f);
+
 
 	sp->use();
 	glUniformMatrix4fv(sp->u("P"), 1, GL_FALSE, glm::value_ptr(P));
 	glUniformMatrix4fv(sp->u("V"), 1, GL_FALSE, glm::value_ptr(V));
-	glUniform4f(sp->u("lp"), -1.0f, 1.0f, -0.5f, 0.0f);
 
-	// Jet
-	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M_rot));
-	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet, countsPerMatJet, matTexIDsJet);
+	// draw airplane
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
+	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet,
+		countsPerMatJet, matTexIDsJet);
 
-	// City
-	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M_identity));
-	drawModel(vertsPerMatCity, normsPerMatCity, uvsPerMatCity, countsPerMatCity, matTexIDsCity);
+	// draw city with identity
+	glm::mat4 I(1.0f);
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(I));
+	drawModel(vertsPerMatCity, normsPerMatCity, uvsPerMatCity,
+		countsPerMatCity, matTexIDsCity);
 
 	glfwSwapBuffers(window);
 }
@@ -298,15 +378,14 @@ int main() {
 
 	if (!initOpenGLProgram(w)) return 1;
 
-	float ax = 0, ay = 0;
 	glfwSetTime(0);
 	while (!glfwWindowShouldClose(w)) {
 		float dt = glfwGetTime();
-		ax += speed_x * dt;
-		ay += speed_y * dt;
 		glfwSetTime(0);
 
-		drawScene(w, ay, ax);
+		updatePhysics(dt);
+
+		drawScene(w);
 		glfwPollEvents();
 	}
 	freeOpenGLProgram(w);
