@@ -35,8 +35,9 @@ const float yawAccel = glm::radians(180.0f);
 float currentRollAngle = 0.0f;
 const float rollAccel = glm::radians(60.0f);
 
-const float MIN_X = -500, MAX_X = 500;
-const float MIN_Z = -500, MAX_Z = 500;
+float MIN_X = -500, MAX_X = 500;
+float MIN_Z = -500, MAX_Z = 500;
+float MIN_Y = 10.0f, MAX_Y = +200.0f;
 
 float aspectRatio = 1;
 
@@ -194,7 +195,7 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	glfwSetWindowSizeCallback(window, windowResizeCallback);
 	glfwSetKeyCallback(window, keyCallback);
 
-	if (!loadModel("jetanima.obj", vertsPerMatJet, normsPerMatJet, uvsPerMatJet, countsPerMatJet, materialsJet)) {
+		if (!loadModel("jetanima.obj", vertsPerMatJet, normsPerMatJet, uvsPerMatJet, countsPerMatJet, materialsJet)) {
 		std::cerr << "Failed to load jetanima\n";
 		return false;
 	}
@@ -236,6 +237,27 @@ bool initOpenGLProgram(GLFWwindow* window) {
 			);
 		}
 	}
+
+	glm::vec2 cityMin(FLT_MAX, FLT_MAX);
+	glm::vec2 cityMax(-FLT_MAX, -FLT_MAX);
+
+	for (const auto& matVerts : vertsPerMatCity) {
+		// matVerts is a flat [x,y,z,1, x,y,z,1, …]
+		for (size_t i = 0; i + 3 < matVerts.size(); i += 4) {
+			float x = matVerts[i];
+			float z = matVerts[i + 2];
+			cityMin.x = glm::min(cityMin.x, x);
+			cityMax.x = glm::max(cityMax.x, x);
+			cityMin.y = glm::min(cityMin.y, z);
+			cityMax.y = glm::max(cityMax.y, z);
+		}
+	}
+
+	// store these in globals
+	MIN_X = cityMin.x;
+	MAX_X = cityMax.x;
+	MIN_Z = cityMin.y;
+	MAX_Z = cityMax.y;
 
 	sp = new ShaderProgram("v_simplest.glsl", nullptr, "f_simplest.glsl");
 	return true;
@@ -279,7 +301,7 @@ void updatePhysics(float dt) {
 	// 8) Clamp position...
 	airplane.pos.x = glm::clamp(airplane.pos.x, MIN_X, MAX_X);
 	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z, MAX_Z);
-	airplane.pos.y = glm::clamp(airplane.pos.y, 10.0f, 500.0f);
+	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
 }
 
 
