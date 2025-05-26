@@ -1,5 +1,6 @@
-# Visual Studio temporary files
+# Temporary files
 src/.vs/
+temp/
 
 # Build output directories
 src/Win32/
