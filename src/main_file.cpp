@@ -19,6 +19,13 @@
 
 ShaderProgram* sp = nullptr;
 
+struct AABB {
+	glm::vec3 min;
+	glm::vec3 max;
+};
+std::vector<AABB> cityBuildings;
+
+
 struct AirplaneState {
 	glm::vec3 pos;
 	float yaw, pitch;
@@ -37,7 +44,17 @@ const float rollAccel = glm::radians(60.0f);
 
 float MIN_X = -500, MAX_X = 500;
 float MIN_Z = -500, MAX_Z = 500;
-float MIN_Y = 10.0f, MAX_Y = +200.0f;
+float MIN_Y = 2.0f, MAX_Y = +200.0f;
+
+bool explosionActive = false;
+float explosionTimer = 0.0f;
+glm::vec3 explosionPos;
+const float explosionDuration = 1.5f;
+
+GLuint explosionTexture = 0;
+const int explosionFramesX = 5;
+const int explosionFramesY = 5;
+const int explosionTotalFrames = explosionFramesX * explosionFramesY;
 
 float aspectRatio = 1;
 
@@ -139,6 +156,8 @@ bool loadModel(
 	if (!err.empty()) std::cerr << "ERR : " << err << "\n";
 	if (!ret) return false;
 
+	std::cout << "Loaded " << shapes.size() << " shapes from city OBJ" << std::endl;
+
 	int M = (int)materials.size();
 	vertsPerMat.assign(M, {});
 	normsPerMat.assign(M, {});
@@ -183,8 +202,30 @@ bool loadModel(
 			index_offset += fv;
 		}
 	}
+
+	for (const auto& shape : shapes) {
+		glm::vec3 min(FLT_MAX), max(-FLT_MAX);
+		size_t index_offset = 0;
+		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
+			int fv = shape.mesh.num_face_vertices[f];
+			for (int v = 0; v < fv; v++) {
+				auto idx = shape.mesh.indices[index_offset + v];
+				glm::vec3 vtx(
+					attrib.vertices[3 * idx.vertex_index + 0],
+					attrib.vertices[3 * idx.vertex_index + 1],
+					attrib.vertices[3 * idx.vertex_index + 2]
+				);
+				min = glm::min(min, vtx);
+				max = glm::max(max, vtx);
+			}
+			index_offset += fv;
+		}
+		cityBuildings.push_back({ min, max });
+	}
+
 	return true;
 }
+
 
 bool initOpenGLProgram(GLFWwindow* window) {
 	glClearColor(0.15f, 0.15f, 0.25f, 1);
@@ -204,6 +245,7 @@ bool initOpenGLProgram(GLFWwindow* window) {
 		return false;
 	}
 
+	
 	matTexIDsJet.resize(materialsJet.size(), 0);
 	for (size_t i = 0; i < materialsJet.size(); i++) {
 		std::string texname = materialsJet[i].diffuse_texname;
@@ -259,17 +301,146 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	MIN_Z = cityMin.y;
 	MAX_Z = cityMax.y;
 
+	explosionTexture = readTexture("explosion.png");
+
 	sp = new ShaderProgram("v_simplest.glsl", nullptr, "f_simplest.glsl");
 	return true;
 }
 
+bool checkCollision(const glm::vec3& pos) {
+	for (const auto& box : cityBuildings) {
+		if (pos.x > box.min.x && pos.x < box.max.x &&
+			pos.y > box.min.y && pos.y < box.max.y &&
+			pos.z > box.min.z && pos.z < box.max.z) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void drawExplosionSprite(float t, const glm::mat4& M) {
+	int frame = int(t * explosionTotalFrames);
+	if (frame >= explosionTotalFrames) frame = explosionTotalFrames - 1;
+
+	int fx = frame % explosionFramesX;
+	int fy = frame / explosionFramesX;
+
+	float du = 1.0f / explosionFramesX;
+	float dv = 1.0f / explosionFramesY;
+
+	float u0 = fx * du;
+	float v0 = fy * dv;
+	float u1 = u0 + du;
+	float v1 = v0 + dv;
+
+	// Enable alpha blending
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	// Bind texture
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, explosionTexture);
+
+	glUniform1i(sp->u("textureMap0"), 0);
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
+
+	glEnableVertexAttribArray(sp->a("vertex"));
+	glEnableVertexAttribArray(sp->a("texCoord0"));
+
+	float quadVerts[] = {
+		-1, -1, 0, 1,
+		 1, -1, 0, 1,
+		 1,  1, 0, 1,
+		-1,  1, 0, 1
+	};
+	float quadUV[] = {
+		u0, v1,
+		u1, v1,
+		u1, v0,
+		u0, v0
+	};
+
+	glVertexAttribPointer(sp->a("vertex"), 4, GL_FLOAT, GL_FALSE, 0, quadVerts);
+	glVertexAttribPointer(sp->a("texCoord0"), 2, GL_FLOAT, GL_FALSE, 0, quadUV);
+
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+	glDisableVertexAttribArray(sp->a("vertex"));
+	glDisableVertexAttribArray(sp->a("texCoord0"));
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glDisable(GL_BLEND);
+}
+
+
+void startExplosion(const glm::vec3& pos) {
+	explosionActive = true;
+	explosionTimer = 0.0f;
+	explosionPos = pos;
+}
+
+bool levelingPitch = false;
 
 void updatePhysics(float dt) {
+	if (explosionActive) {
+		explosionTimer += dt;
+		if (explosionTimer >= explosionDuration) {
+			explosionActive = false;
+			airplane.pos = glm::vec3(0, 40, 0);
+			airplane.yaw = 0;
+			airplane.pitch = 0;
+			currentYawRate = 0;
+			targetYawRate = 0;
+			yawRate = 0;
+			pitchRate = 0;
+			currentRollAngle = 0;
+		}
+		return;
+	}
+
 	// 1) Smooth yawRate
 	float diff = targetYawRate - currentYawRate;
 	float maxStep = yawAccel * dt;
 	diff = glm::clamp(diff, -maxStep, maxStep);
 	currentYawRate += diff;
+
+	if (airplane.pos.y <= MIN_Y) {
+		levelingPitch = true;
+	}
+	else {
+		levelingPitch = false;
+	}
+
+	if (levelingPitch) {
+		float levelingSpeed = glm::radians(45.0f); // скорость выравнивания
+
+		if (pitchRate < 0.0f) {
+			// Разрешить только "взлет" (нос вверх)
+			airplane.pitch += pitchRate * dt;
+			// Ограничить максимум наклон носа вверх и не допускать наклон вниз
+			if (airplane.pitch < glm::radians(-45.0f)) airplane.pitch = glm::radians(-45.0f);
+			if (airplane.pitch > 0.0f) airplane.pitch = 0.0f;
+		}
+		else {
+			// Автоматическое выравнивание к горизонту
+			if (fabs(airplane.pitch) < levelingSpeed * dt) {
+				airplane.pitch = 0.0f;
+			}
+			else if (airplane.pitch > 0.0f) {
+				airplane.pitch -= levelingSpeed * dt;
+				if (airplane.pitch < 0.0f) airplane.pitch = 0.0f;
+			}
+			else if (airplane.pitch < 0.0f) {
+				airplane.pitch += levelingSpeed * dt;
+				if (airplane.pitch > 0.0f) airplane.pitch = 0.0f;
+			}
+		}
+		pitchRate = 0.0f; // Полное отключение управления наклоном вниз на земле!
+	}
+	else {
+		// В воздухе — обычное управление
+		airplane.pitch += pitchRate * dt;
+		airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-45.0f), glm::radians(45.0f));
+	}
 
 	// 2) Apply to heading
 	airplane.yaw += currentYawRate * dt;
@@ -298,10 +469,22 @@ void updatePhysics(float dt) {
 	glm::vec3 forward = glm::normalize(glm::vec3(R * glm::vec4(0, 0, 1, 0)));
 	airplane.pos += forward * (airplane.speed * dt);
 
+
 	// 8) Clamp position...
+	bool outOfBounds = false;
+	if (airplane.pos.x <= MIN_X || airplane.pos.x >= MAX_X ||
+		airplane.pos.z <= MIN_Z || airplane.pos.z >= MAX_Z) {
+		outOfBounds = true;
+	}
+
 	airplane.pos.x = glm::clamp(airplane.pos.x, MIN_X, MAX_X);
 	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z, MAX_Z);
 	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
+
+	if (airplane.pos.y < MIN_Y || checkCollision(airplane.pos) || outOfBounds) {
+		startExplosion(airplane.pos);
+	}
+
 }
 
 
@@ -333,6 +516,14 @@ void drawModel(
 		glDisableVertexAttribArray(sp->a("normal"));
 		glDisableVertexAttribArray(sp->a("texCoord0"));
 	}
+}
+
+void drawSphereModel() {
+	glBegin(GL_QUADS);
+	glColor3f(1.0, 0.7, 0.0);
+	glVertex3f(-1, -1, -1); glVertex3f(1, -1, -1); glVertex3f(1, 1, -1); glVertex3f(-1, 1, -1);
+	glVertex3f(-1, -1, 1); glVertex3f(1, -1, 1); glVertex3f(1, 1, 1); glVertex3f(-1, 1, 1);
+	glEnd();
 }
 
 void drawScene(GLFWwindow* window) {
@@ -372,16 +563,47 @@ void drawScene(GLFWwindow* window) {
 	glUniformMatrix4fv(sp->u("P"), 1, GL_FALSE, glm::value_ptr(P));
 	glUniformMatrix4fv(sp->u("V"), 1, GL_FALSE, glm::value_ptr(V));
 
-	// draw airplane
-	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
-	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet,
-		countsPerMatJet, matTexIDsJet);
-
 	// draw city with identity
 	glm::mat4 I(1.0f);
 	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(I));
 	drawModel(vertsPerMatCity, normsPerMatCity, uvsPerMatCity,
 		countsPerMatCity, matTexIDsCity);
+
+	if (explosionActive) {
+		float t = explosionTimer / explosionDuration;
+		float scale = 1.5f;
+
+		glm::mat4 model = glm::translate(glm::mat4(1.0f), explosionPos);
+		// Биллбординг: квадраты будут всегда стоять к камере
+		glm::vec3 camForward = glm::normalize(airplane.pos - camPos);
+		glm::vec3 up = glm::vec3(0, 1, 0);
+		glm::vec3 right = glm::normalize(glm::cross(up, camForward));
+		up = glm::cross(camForward, right);
+		glm::mat4 rot(1.0f);
+		rot[0] = glm::vec4(right, 0);
+		rot[1] = glm::vec4(up, 0);
+		rot[2] = glm::vec4(camForward, 0);
+		model = model * rot * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+
+		sp->use();
+
+		// Нарисовать 2 или 3 квадрата, повернутых друг к другу
+		int crossCount = 6; // Можно сделать 3 для большей плотности
+		for (int i = 0; i < crossCount; ++i) {
+			float angle = glm::radians(30.0f * i); // 90° между двумя, 60° если 3
+			glm::mat4 crossRot = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0, 1, 0));
+			glm::mat4 M = model * crossRot;
+			drawExplosionSprite(t, M);
+		}
+
+		glfwSwapBuffers(window);
+		return;
+	}
+
+	// draw airplane
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
+	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet,
+		countsPerMatJet, matTexIDsJet);
 
 	glfwSwapBuffers(window);
 }

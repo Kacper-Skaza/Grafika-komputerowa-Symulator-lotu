@@ -52,5 +52,8 @@
     <None Include="v_simplest.glsl">
       <Filter>Pliki zasobów</Filter>
     </None>
+    <None Include="g_simplest.glsl">
+      <Filter>Pliki zasobów</Filter>
+    </None>
   </ItemGroup>
 </Project>
