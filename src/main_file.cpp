@@ -42,9 +42,9 @@ const float yawAccel = glm::radians(180.0f);
 float currentRollAngle = 0.0f;
 const float rollAccel = glm::radians(60.0f);
 
-float MIN_X = -500, MAX_X = 500;
-float MIN_Z = -500, MAX_Z = 500;
-float MIN_Y = 2.0f, MAX_Y = +200.0f;
+float MIN_X = -10.0f, MAX_X = 10.0f;
+float MIN_Z = -10.0f, MAX_Z = 10.0f;
+float MIN_Y = -10.0f, MAX_Y = 200.0f;
 
 bool explosionActive = false;
 float explosionTimer = 0.0f;
@@ -67,7 +67,7 @@ void error_callback(int e, const char* d) {
 }
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-	const float ANG_V = glm::radians(45.0f); // angular speed in radians/sec
+	constexpr float ANG_V = glm::radians(45.0f); // angular speed in radians/sec
 
 	if (action == GLFW_PRESS) {
 		if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_V;  // bank left
@@ -137,6 +137,11 @@ std::vector<int> countsPerMatCity;
 std::vector<tinyobj::material_t> materialsCity;
 std::vector<GLuint> matTexIDsCity;
 
+std::vector<std::vector<float>> vertsPerMatAirport, normsPerMatAirport, uvsPerMatAirport;
+std::vector<int> countsPerMatAirport;
+std::vector<tinyobj::material_t> materialsAirport;
+std::vector<GLuint> matTexIDsAirport;
+
 
 
 bool loadModel(
@@ -156,7 +161,7 @@ bool loadModel(
 	if (!err.empty()) std::cerr << "ERR : " << err << "\n";
 	if (!ret) return false;
 
-	std::cout << "Loaded " << shapes.size() << " shapes from city OBJ" << std::endl;
+	std::cout << "Loaded " << shapes.size() << " shapes from " << objFile << std::endl;
 
 	int M = (int)materials.size();
 	vertsPerMat.assign(M, {});
@@ -236,16 +241,20 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	glfwSetWindowSizeCallback(window, windowResizeCallback);
 	glfwSetKeyCallback(window, keyCallback);
 
-		if (!loadModel("jetanima.obj", vertsPerMatJet, normsPerMatJet, uvsPerMatJet, countsPerMatJet, materialsJet)) {
-		std::cerr << "Failed to load jetanima\n";
+	if (!loadModel("jetanima.obj", vertsPerMatJet, normsPerMatJet, uvsPerMatJet, countsPerMatJet, materialsJet)) {
+		std::cerr << "Failed to load jetanima.obj\n";
 		return false;
 	}
 	if (!loadModel("City.obj", vertsPerMatCity, normsPerMatCity, uvsPerMatCity, countsPerMatCity, materialsCity)) {
-		std::cerr << "Failed to load city\n";
+		std::cerr << "Failed to load City.obj\n";
+		return false;
+	}
+	if (!loadModel("Airport.obj", vertsPerMatAirport, normsPerMatAirport, uvsPerMatAirport, countsPerMatAirport, materialsAirport)) {
+		std::cerr << "Failed to load Airport.obj\n";
 		return false;
 	}
 
-	
+
 	matTexIDsJet.resize(materialsJet.size(), 0);
 	for (size_t i = 0; i < materialsJet.size(); i++) {
 		std::string texname = materialsJet[i].diffuse_texname;
@@ -275,6 +284,30 @@ bool initOpenGLProgram(GLFWwindow* window) {
 		else {
 			// brak pliku – stwórz 1×1 texturę z kolorem Kd
 			matTexIDsCity[i] = makeColorTexture(
+				mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], mat.dissolve
+			);
+		}
+	}
+
+	matTexIDsAirport.resize(materialsAirport.size());
+	for (size_t i = 0; i < materialsAirport.size(); i++) {
+		auto& mat = materialsAirport[i];
+		// jeśli jest tekstura – wczytaj ją
+		if (!mat.diffuse_texname.empty()) {
+			std::string texname = mat.diffuse_texname;
+			auto pos = texname.find_last_of("/\\");
+			if (pos != std::string::npos) texname = texname.substr(pos + 1);
+			matTexIDsAirport[i] = readTexture(texname);
+			if (matTexIDsAirport[i] == 0) {
+				// błąd wczytania → fallback na kolor
+				matTexIDsAirport[i] = makeColorTexture(
+					mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], mat.dissolve
+				);
+			}
+		}
+		else {
+			// brak pliku – stwórz 1×1 texturę z kolorem Kd
+			matTexIDsAirport[i] = makeColorTexture(
 				mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], mat.dissolve
 			);
 		}
@@ -411,7 +444,7 @@ void updatePhysics(float dt) {
 	}
 
 	if (levelingPitch) {
-		float levelingSpeed = glm::radians(45.0f); // скорость выравнивания
+		constexpr float levelingSpeed = glm::radians(45.0f); // скорость выравнивания
 
 		if (pitchRate < 0.0f) {
 			// Разрешить только "взлет" (нос вверх)
@@ -556,18 +589,22 @@ void drawScene(GLFWwindow* window) {
 		aspectRatio,
 		0.1f, 2000.0f);
 
+	// Sun
 	glUniform4f(sp->u("lp"), -1.0f, 1.0f, -0.5f, 0.0f);
-
 
 	sp->use();
 	glUniformMatrix4fv(sp->u("P"), 1, GL_FALSE, glm::value_ptr(P));
 	glUniformMatrix4fv(sp->u("V"), 1, GL_FALSE, glm::value_ptr(V));
 
-	// draw city with identity
+	// draw City.obj
 	glm::mat4 I(1.0f);
 	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(I));
-	drawModel(vertsPerMatCity, normsPerMatCity, uvsPerMatCity,
-		countsPerMatCity, matTexIDsCity);
+	drawModel(vertsPerMatCity, normsPerMatCity, uvsPerMatCity, countsPerMatCity, matTexIDsCity);
+
+	// draw Airport.obj
+	glm::mat4 T = glm::translate(glm::mat4(1.0f), glm::vec3(-186.0f, 0.1f, 67.0f));
+	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(T));
+	drawModel(vertsPerMatAirport, normsPerMatAirport, uvsPerMatAirport, countsPerMatAirport, matTexIDsAirport);
 
 	if (explosionActive) {
 		float t = explosionTimer / explosionDuration;
