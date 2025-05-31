@@ -25,12 +25,14 @@ struct AABB {
 };
 std::vector<AABB> cityBuildings;
 
-
 struct AirplaneState {
 	glm::vec3 pos;
 	float yaw, pitch;
 	float speed;
 };
+
+bool throttleUpPressed = false;
+bool throttleDownPressed = false;
 
 AirplaneState airplane = { glm::vec3(0, 40, 0), 0.0f, 0.0f, 10.0f };
 float yawRate = 0.0f;
@@ -42,10 +44,6 @@ const float yawAccel = glm::radians(180.0f);
 float currentRollAngle = 0.0f;
 const float rollAccel = glm::radians(60.0f);
 
-float MIN_X = -10.0f, MAX_X = 10.0f;
-float MIN_Z = -10.0f, MAX_Z = 10.0f;
-float MIN_Y = -10.0f, MAX_Y = 200.0f;
-
 bool explosionActive = false;
 float explosionTimer = 0.0f;
 glm::vec3 explosionPos;
@@ -55,6 +53,40 @@ GLuint explosionTexture = 0;
 const int explosionFramesX = 5;
 const int explosionFramesY = 5;
 const int explosionTotalFrames = explosionFramesX * explosionFramesY;
+
+float verticalSpeed = 0.0f;
+const float GRAVITY = 9.81f;
+bool isStalling = false;
+
+
+const float MIN_TAKEOFF_SPEED = 10.0f;
+const float STALL_SPEED = 8.0f;
+const float MAX_SPEED = 20.0f;
+
+float throttle = 0.0f;
+float targetThrottle = 0.0f;
+
+bool onGround = true;
+
+bool isLandingAssistActive = false;
+float landingAssistTimer = 0.0f;
+const float LANDING_ASSIST_DURATION = 2.0f;
+const float SAFE_LANDING_SPEED = 10.0f;
+const float LANDING_PITCH_THRESHOLD = glm::radians(25.0f);
+
+AABB airportAABB;
+glm::vec3 airportCenter;
+std::vector<AABB> airportRunwayAABBs;
+std::vector<AABB> airportObstacles;
+glm::vec3 airportDrawOffset(-186.0f, 0.1f, 67.0f);
+float airportGroundLevel = airportAABB.min.y + airportDrawOffset.y;
+const float AIRPORT_SAFE_RADIUS = 30.0f;
+const float STALL_NOSEDOWN = glm::radians(55.0f);
+const float STALL_BLEND_SPEED = 2.5f;
+
+float MIN_X = -10.0f, MAX_X = 10.0f;
+float MIN_Z = -10.0f, MAX_Z = 10.0f;
+float MIN_Y = 1.0f, MAX_Y = 200.0f;
 
 float aspectRatio = 1;
 
@@ -67,19 +99,62 @@ void error_callback(int e, const char* d) {
 }
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-	constexpr float ANG_V = glm::radians(45.0f); // angular speed in radians/sec
+	constexpr float ANG_V = glm::radians(20.0f); // angular speed in radians/sec
+	constexpr float ANG_H = glm::radians(60.0f); // angular speed in radians/sec
 
 	if (action == GLFW_PRESS) {
-		if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_V;  // bank left
-		if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_V;  // bank right
-		if (key == GLFW_KEY_DOWN)   pitchRate = -ANG_V;  // ↓ nose up (climb)
-		if (key == GLFW_KEY_UP)     pitchRate = ANG_V;  // ↑ nose down (descend)
+		if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_H;  // bank left
+		if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_H;  // bank right
+
+		if (airplane.speed >= MIN_TAKEOFF_SPEED) {
+			if (key == GLFW_KEY_DOWN)   pitchRate = -ANG_V;
+			if (key == GLFW_KEY_UP)     pitchRate = ANG_V;
+		}
 	}
 	else if (action == GLFW_RELEASE) {
 		if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) targetYawRate = 0.0f;
 		if (key == GLFW_KEY_DOWN || key == GLFW_KEY_UP)    pitchRate = 0.0f;
 	}
+
+	if (key == GLFW_KEY_W) {
+		if (action == GLFW_PRESS)
+			throttleUpPressed = true;
+		else if (action == GLFW_RELEASE)
+			throttleUpPressed = false;
+	}
+	if (key == GLFW_KEY_S) {
+		if (action == GLFW_PRESS)
+			throttleDownPressed = true;
+		else if (action == GLFW_RELEASE)
+			throttleDownPressed = false;
+	}
 }
+
+bool isOverAirport(const glm::vec3& posWorld) {
+	glm::vec2 p2d(posWorld.x, posWorld.z);
+	glm::vec2 a2d = glm::vec2(
+		airportCenter.x + airportDrawOffset.x,
+		airportCenter.z + airportDrawOffset.z
+	);
+	bool over = glm::distance(p2d, a2d) < AIRPORT_SAFE_RADIUS;
+
+	return over;
+}
+
+bool isOnRunway(const glm::vec3& posWorld) {
+	glm::vec3 posLocal = posWorld - airportDrawOffset;
+
+	for (const auto& box : airportRunwayAABBs) {
+		if (posLocal.x > box.min.x && posLocal.x < box.max.x &&
+			posLocal.y >(box.min.y - 2.0f) && posLocal.y < (box.max.y + 3.0f) &&
+			posLocal.z > box.min.z && posLocal.z < box.max.z) {
+
+			return true;
+		}
+	}
+	return false;
+}
+
 
 void windowResizeCallback(GLFWwindow* w, int width, int height) {
 	if (height == 0) return;
@@ -98,7 +173,7 @@ GLuint readTexture(const std::string& fname) {
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.data());
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	// Dodane ustawienia wrap
+
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	return tex;
@@ -150,7 +225,8 @@ bool loadModel(
 	std::vector<std::vector<float>>& normsPerMat,
 	std::vector<std::vector<float>>& uvsPerMat,
 	std::vector<int>& countsPerMat,
-	std::vector<tinyobj::material_t>& materials
+	std::vector<tinyobj::material_t>& materials,
+	AABB* outAABB = nullptr
 ) {
 	tinyobj::attrib_t attrib;
 	std::vector<tinyobj::shape_t> shapes;
@@ -174,8 +250,7 @@ bool loadModel(
 		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
 			int fv = shape.mesh.num_face_vertices[f];
 			int matID = shape.mesh.material_ids[f];
-			// Kontrola matID
-			if (matID < 0 || matID >= M) matID = 0; // domyślny materiał
+			if (matID < 0 || matID >= M) matID = 0;
 
 			for (int v = 0; v < fv; v++) {
 				auto idx = shape.mesh.indices[index_offset + v];
@@ -208,9 +283,15 @@ bool loadModel(
 		}
 	}
 
-	for (const auto& shape : shapes) {
-		glm::vec3 min(FLT_MAX), max(-FLT_MAX);
+	glm::vec3 min(FLT_MAX), max(-FLT_MAX);
+	for (auto& shape : shapes) {
 		size_t index_offset = 0;
+		int matID = -1;
+		if (!shape.mesh.material_ids.empty())
+			matID = shape.mesh.material_ids[0];
+		std::string matName = (matID >= 0 && matID < materials.size()) ? materials[matID].name : "";
+
+		glm::vec3 shapeMin(FLT_MAX), shapeMax(-FLT_MAX);
 		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
 			int fv = shape.mesh.num_face_vertices[f];
 			for (int v = 0; v < fv; v++) {
@@ -220,14 +301,29 @@ bool loadModel(
 					attrib.vertices[3 * idx.vertex_index + 1],
 					attrib.vertices[3 * idx.vertex_index + 2]
 				);
+				shapeMin = glm::min(shapeMin, vtx);
+				shapeMax = glm::max(shapeMax, vtx);
 				min = glm::min(min, vtx);
 				max = glm::max(max, vtx);
 			}
 			index_offset += fv;
 		}
-		cityBuildings.push_back({ min, max });
+
+		bool isRunway = false;
+		if (matName.find("Asphalt") != std::string::npos ||
+			matName.find("runway") != std::string::npos ||
+			matName.find("White") != std::string::npos ||
+			matName.find("Blue") != std::string::npos) {
+			isRunway = true;
+		}
+
+		if (isRunway)
+			airportRunwayAABBs.push_back({ shapeMin, shapeMax });
+		else
+			airportObstacles.push_back({ shapeMin, shapeMax });
 	}
 
+	if (outAABB) *outAABB = { min, max };
 	return true;
 }
 
@@ -249,11 +345,55 @@ bool initOpenGLProgram(GLFWwindow* window) {
 		std::cerr << "Failed to load City.obj\n";
 		return false;
 	}
-	if (!loadModel("Airport.obj", vertsPerMatAirport, normsPerMatAirport, uvsPerMatAirport, countsPerMatAirport, materialsAirport)) {
+
+	tinyobj::attrib_t attribCity;
+	std::vector<tinyobj::shape_t> shapesCity;
+	std::vector<tinyobj::material_t> matsCity;
+	std::string warnCity, errCity;
+	bool ok = tinyobj::LoadObj(&attribCity, &shapesCity, &matsCity, &warnCity, &errCity, "City.obj", ".");
+	if (!ok) {
+		std::cerr << "WARN: cannot reload City.obj for AABB generation\n";
+	}
+	else {
+		for (auto& shape : shapesCity) {
+			glm::vec3 shapeMin(FLT_MAX), shapeMax(-FLT_MAX);
+			size_t index_offset = 0;
+			for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
+				int fv = shape.mesh.num_face_vertices[f];
+				for (int v = 0; v < fv; v++) {
+					auto idx = shape.mesh.indices[index_offset + v];
+					glm::vec3 vtx(
+						attribCity.vertices[3 * idx.vertex_index + 0],
+						attribCity.vertices[3 * idx.vertex_index + 1],
+						attribCity.vertices[3 * idx.vertex_index + 2]
+					);
+					shapeMin = glm::min(shapeMin, vtx);
+					shapeMax = glm::max(shapeMax, vtx);
+				}
+				index_offset += fv;
+			}
+			cityBuildings.push_back({ shapeMin, shapeMax });
+		}
+	}
+
+
+	if (!loadModel("Airport.obj", vertsPerMatAirport, normsPerMatAirport, uvsPerMatAirport, countsPerMatAirport, materialsAirport, &airportAABB)) {
 		std::cerr << "Failed to load Airport.obj\n";
 		return false;
 	}
 
+	airportCenter = (airportAABB.min + airportAABB.max) * 0.5f;
+	airportGroundLevel = airportAABB.min.y;
+
+	airplane.pos = airportCenter + airportDrawOffset + glm::vec3(0, 3.0f, 0);
+	airplane.yaw = 0.0f;
+	airplane.pitch = 0.0f;
+	airplane.speed = 0.0f;
+	onGround = true;
+	throttle = 0.0f;
+	targetThrottle = 0.0f;
+
+	std::cout << "AIRPORT CENTER: " << airportCenter.x << " " << airportCenter.y << " " << airportCenter.z << std::endl;
 
 	matTexIDsJet.resize(materialsJet.size(), 0);
 	for (size_t i = 0; i < materialsJet.size(); i++) {
@@ -340,16 +480,112 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	return true;
 }
 
-bool checkCollision(const glm::vec3& pos) {
+bool checkCollision(const glm::vec3& posWorld) {
+	// Convert world coordinates back to airport‐local coordinates:
+	glm::vec3 posLocal = posWorld - airportDrawOffset;
+
+	// 1) If the plane is on the ground AND is exactly on a runway, skip collisions.
+	if (onGround && isOnRunway(posWorld)) {
+		return false;
+	}
+
+	// 1b) If the plane is on the ground but NOT on a runway, skip obstacle checks entirely
+	//     (taxiing/parked). This prevents instant collision with airport structures.
+	if (onGround) {
+		return false;
+	}
+
+	// 2) If in the “safe radius” of the airport, do a more lenient check against obstacles
+	if (isOverAirport(posWorld)) {
+		float buffer = (airplane.speed < MIN_TAKEOFF_SPEED + 5.0f) ? 8.0f : 2.0f;
+		for (const auto& box : airportObstacles) {
+			// box.min/.max are in local coords
+			bool inExtended =
+				posLocal.x > (box.min.x - buffer) && posLocal.x < (box.max.x + buffer) &&
+				posLocal.y >(box.min.y - buffer) && posLocal.y < (box.max.y + buffer) &&
+				posLocal.z >(box.min.z - buffer) && posLocal.z < (box.max.z + buffer);
+
+			bool inCore =
+				posLocal.x > (box.min.x + 1.0f) && posLocal.x < (box.max.x - 1.0f) &&
+				posLocal.y >(box.min.y + 1.0f) && posLocal.y < (box.max.y - 1.0f) &&
+				posLocal.z >(box.min.z + 1.0f) && posLocal.z < (box.max.z - 1.0f);
+
+			if (inExtended && inCore) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// 3) Check against city buildings (these AABBs are already in world coords from City.obj)
 	for (const auto& box : cityBuildings) {
-		if (pos.x > box.min.x && pos.x < box.max.x &&
-			pos.y > box.min.y && pos.y < box.max.y &&
-			pos.z > box.min.z && pos.z < box.max.z) {
+		bool coll =
+			posWorld.x > box.min.x && posWorld.x < box.max.x &&
+			posWorld.y > box.min.y && posWorld.y < box.max.y &&
+			posWorld.z > box.min.z && posWorld.z < box.max.z;
+
+		if (coll) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+bool isInLandingApproach(const glm::vec3& posWorld) {
+	for (const auto& box : airportRunwayAABBs) {
+		float approachDistance = 50.0f;
+		// Build an extended AABB around the runway to detect approach
+		AABB extendedRunway = {
+			glm::vec3(box.min.x - approachDistance, box.min.y - 10.0f, box.min.z - approachDistance),
+			glm::vec3(box.max.x + approachDistance, box.max.y + 20.0f, box.max.z + approachDistance)
+		};
+
+		if (posWorld.x > extendedRunway.min.x && posWorld.x < extendedRunway.max.x &&
+			posWorld.y > extendedRunway.min.y && posWorld.y < extendedRunway.max.y &&
+			posWorld.z > extendedRunway.min.z && posWorld.z < extendedRunway.max.z) {
 			return true;
 		}
 	}
 	return false;
 }
+
+void updateLandingAssist(float dt) {
+	if (!onGround && isInLandingApproach(airplane.pos)) {
+		if (!isLandingAssistActive) {
+			isLandingAssistActive = true;
+			landingAssistTimer = 0.0f;
+		}
+
+		landingAssistTimer += dt;
+		float assistStrength = glm::min(1.0f, landingAssistTimer / LANDING_ASSIST_DURATION);
+
+		// Limit extreme pitch angles
+		if (fabs(airplane.pitch) > LANDING_PITCH_THRESHOLD) {
+			float targetPitch = glm::clamp(airplane.pitch, -LANDING_PITCH_THRESHOLD, LANDING_PITCH_THRESHOLD);
+			airplane.pitch = glm::mix(airplane.pitch, targetPitch, assistStrength * 0.5f * dt);
+		}
+
+		// Limit extreme roll angles
+		if (fabs(currentRollAngle) > glm::radians(15.0f)) {
+			float maxLandingRoll = glm::radians(15.0f);
+			float targetRoll = glm::clamp(currentRollAngle, -maxLandingRoll, maxLandingRoll);
+			currentRollAngle = glm::mix(currentRollAngle, targetRoll, assistStrength * dt);
+		}
+
+		// If too fast on approach, gently slow down
+		if (airplane.speed > SAFE_LANDING_SPEED) {
+			float speedReduction = assistStrength * 3.0f * dt;
+			airplane.speed = glm::max(SAFE_LANDING_SPEED, airplane.speed - speedReduction);
+		}
+	}
+	else {
+		isLandingAssistActive = false;
+		landingAssistTimer = 0.0f;
+	}
+}
+
 
 void drawExplosionSprite(float t, const glm::mat4& M) {
 	int frame = int(t * explosionTotalFrames);
@@ -411,14 +647,15 @@ void startExplosion(const glm::vec3& pos) {
 	explosionPos = pos;
 }
 
-bool levelingPitch = false;
+float takeoffTimer = 0.0f;
 
 void updatePhysics(float dt) {
 	if (explosionActive) {
 		explosionTimer += dt;
 		if (explosionTimer >= explosionDuration) {
 			explosionActive = false;
-			airplane.pos = glm::vec3(0, 40, 0);
+			// Reset to airport
+			airplane.pos = airportCenter + airportDrawOffset + glm::vec3(0, 3.0f, 0);
 			airplane.yaw = 0;
 			airplane.pitch = 0;
 			currentYawRate = 0;
@@ -426,99 +663,169 @@ void updatePhysics(float dt) {
 			yawRate = 0;
 			pitchRate = 0;
 			currentRollAngle = 0;
+			throttle = 0.0f;
+			targetThrottle = 0.0f;
+			airplane.speed = 0.0f;
+			onGround = true;
+			verticalSpeed = 0.0f;
+			isStalling = false;
+			isLandingAssistActive = false;
 		}
 		return;
 	}
 
-	// 1) Smooth yawRate
+	// Update landing assistance
+	updateLandingAssist(dt);
+
+	// Throttle handling
+	const float throttleRate = 0.5f;
+	if (throttleUpPressed)
+		targetThrottle = glm::min(1.0f, targetThrottle + throttleRate * dt);
+	if (throttleDownPressed)
+		targetThrottle = glm::max(0.0f, targetThrottle - throttleRate * dt);
+
+	// Smooth throttle change
+	float thrDiff = targetThrottle - throttle;
+	float maxThrStep = 1.5f * dt;
+	if (fabs(thrDiff) < maxThrStep) throttle = targetThrottle;
+	else throttle += glm::sign(thrDiff) * maxThrStep;
+	throttle = glm::clamp(throttle, 0.0f, 1.0f);
+
+	// Speed calculation
+	float targetSpeed = throttle * MAX_SPEED;
+	float spdDiff = targetSpeed - airplane.speed;
+	float maxSpdStep = 7.0f * dt;
+	if (fabs(spdDiff) < maxSpdStep) airplane.speed = targetSpeed;
+	else airplane.speed += glm::sign(spdDiff) * maxSpdStep;
+	airplane.speed = glm::clamp(airplane.speed, 0.0f, MAX_SPEED);
+
+	// ----------- On Ground ----------
+	if (onGround || airplane.pos.y == MIN_Y) {
+		airplane.pos.y = airportGroundLevel + 2.0f;
+		verticalSpeed = 0.0f;
+		isStalling = false;
+
+		if (pitchRate == 0.0f) {
+			airplane.pitch = glm::mix(airplane.pitch, 0.0f, 0.1f);
+		}
+		else {
+			airplane.pitch += pitchRate * dt;
+			airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-15.0f), glm::radians(15.0f));
+		}
+
+		// Improved takeoff conditions
+		if (airplane.speed >= MIN_TAKEOFF_SPEED && airplane.pitch < glm::radians(-5.0f)) { // Nose up for takeoff
+			onGround = false;
+			takeoffTimer = 1.2f; // Give more time for takeoff transition
+			verticalSpeed = 2.0f; // Initial upward velocity
+			std::cout << "Taking off! Speed: " << airplane.speed << std::endl;
+		}
+	}
+
+	// ---------- In Air -----------
+	else {
+		// Takeoff transition period - be extra careful about collisions
+		if (takeoffTimer > 0.0f) {
+			takeoffTimer -= dt;
+			// Gradually increase altitude during takeoff
+			airplane.pos.y = glm::max(airplane.pos.y, airportGroundLevel + 2.0f + (1.0f - takeoffTimer) * 5.0f);
+		}
+
+		// Free pitch control
+		airplane.pitch += pitchRate * dt;
+		airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-45.0f), glm::radians(45.0f));
+
+		// Stall handling
+		if (airplane.speed < STALL_SPEED && airplane.pos.y > MIN_Y + 0.5f) {
+			if (!isStalling) {
+				isStalling = true;
+			}
+			airplane.pitch = glm::mix(airplane.pitch, STALL_NOSEDOWN, 1.0f - expf(-STALL_BLEND_SPEED * dt));
+			verticalSpeed -= GRAVITY * dt;
+			airplane.pos.y += verticalSpeed * dt;
+		}
+		else {
+			if (isStalling) {
+				isStalling = false;
+				verticalSpeed = 0.0f;
+			}
+		}
+
+		// Apply vertical movement for stalling
+		if (isStalling) {
+			glm::mat4 R(1.0f);
+			R = glm::rotate(R, airplane.yaw, glm::vec3(0, 1, 0));
+			R = glm::rotate(R, airplane.pitch, glm::vec3(1, 0, 0));
+			glm::vec3 localDown = glm::normalize(glm::vec3(R * glm::vec4(0, -1, 0, 0)));
+			airplane.pos += localDown * (-verticalSpeed * dt);
+		}
+
+	}
+
+	// Yaw and roll control
 	float diff = targetYawRate - currentYawRate;
 	float maxStep = yawAccel * dt;
 	diff = glm::clamp(diff, -maxStep, maxStep);
 	currentYawRate += diff;
-
-	if (airplane.pos.y <= MIN_Y) {
-		levelingPitch = true;
-	}
-	else {
-		levelingPitch = false;
-	}
-
-	if (levelingPitch) {
-		constexpr float levelingSpeed = glm::radians(45.0f); // скорость выравнивания
-
-		if (pitchRate < 0.0f) {
-			// Разрешить только "взлет" (нос вверх)
-			airplane.pitch += pitchRate * dt;
-			// Ограничить максимум наклон носа вверх и не допускать наклон вниз
-			if (airplane.pitch < glm::radians(-45.0f)) airplane.pitch = glm::radians(-45.0f);
-			if (airplane.pitch > 0.0f) airplane.pitch = 0.0f;
-		}
-		else {
-			// Автоматическое выравнивание к горизонту
-			if (fabs(airplane.pitch) < levelingSpeed * dt) {
-				airplane.pitch = 0.0f;
-			}
-			else if (airplane.pitch > 0.0f) {
-				airplane.pitch -= levelingSpeed * dt;
-				if (airplane.pitch < 0.0f) airplane.pitch = 0.0f;
-			}
-			else if (airplane.pitch < 0.0f) {
-				airplane.pitch += levelingSpeed * dt;
-				if (airplane.pitch > 0.0f) airplane.pitch = 0.0f;
-			}
-		}
-		pitchRate = 0.0f; // Полное отключение управления наклоном вниз на земле!
-	}
-	else {
-		// В воздухе — обычное управление
-		airplane.pitch += pitchRate * dt;
-		airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-45.0f), glm::radians(45.0f));
-	}
-
-	// 2) Apply to heading
 	airplane.yaw += currentYawRate * dt;
 
-	// 3) Clamp pitch as before
-	airplane.pitch += pitchRate * dt;
-	airplane.pitch = glm::clamp(airplane.pitch, glm::radians(-45.0f), glm::radians(45.0f));
-
-	// 4) Desired roll based on currentYawRate
+	// Roll
 	float desiredRoll = glm::clamp(-currentYawRate * 0.5f,
-		glm::radians(-30.0f),
-		glm::radians(30.0f));
-	// 5) Smooth rollAngle
+		glm::radians(-30.0f), glm::radians(30.0f));
 	float rollDiff = desiredRoll - currentRollAngle;
 	float maxRollStep = rollAccel * dt;
 	rollDiff = glm::clamp(rollDiff, -maxRollStep, maxRollStep);
 	currentRollAngle += rollDiff;
 
-	// 6) Build rotation matrix with smooth roll
+	// Forward movement
 	glm::mat4 R(1.0f);
 	R = glm::rotate(R, airplane.yaw, glm::vec3(0, 1, 0));
 	R = glm::rotate(R, airplane.pitch, glm::vec3(1, 0, 0));
 	R = glm::rotate(R, currentRollAngle, glm::vec3(0, 0, 1));
-
-	// 7) Move forward
 	glm::vec3 forward = glm::normalize(glm::vec3(R * glm::vec4(0, 0, 1, 0)));
 	airplane.pos += forward * (airplane.speed * dt);
 
-
-	// 8) Clamp position...
+	// Boundary checks (more lenient)
 	bool outOfBounds = false;
-	if (airplane.pos.x <= MIN_X || airplane.pos.x >= MAX_X ||
-		airplane.pos.z <= MIN_Z || airplane.pos.z >= MAX_Z) {
+	float boundary_buffer = 20.0f; // Give some extra space
+	if (airplane.pos.x <= (MIN_X - boundary_buffer) || airplane.pos.x >= (MAX_X + boundary_buffer) ||
+		airplane.pos.z <= (MIN_Z - boundary_buffer) || airplane.pos.z >= (MAX_Z + boundary_buffer)) {
 		outOfBounds = true;
 	}
 
-	airplane.pos.x = glm::clamp(airplane.pos.x, MIN_X, MAX_X);
-	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z, MAX_Z);
+	// Clamp position but don't explode immediately if near airport
+	airplane.pos.x = glm::clamp(airplane.pos.x, MIN_X - boundary_buffer, MAX_X + boundary_buffer);
+	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z - boundary_buffer, MAX_Z + boundary_buffer);
 	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
 
-	if (airplane.pos.y < MIN_Y || checkCollision(airplane.pos) || outOfBounds) {
+	// Only explode if really out of bounds and not near airport
+	if (outOfBounds && !isOverAirport(airplane.pos)) {
 		startExplosion(airplane.pos);
+		return;
 	}
 
+	// Only check collision if not in takeoff transition
+	if (takeoffTimer <= 0.0f && checkCollision(airplane.pos)) {
+		startExplosion(airplane.pos);
+		return;
+	}
 }
+
+
+#include <chrono>
+void displayFlightInfo() {
+	static auto last = std::chrono::steady_clock::now();
+	auto now = std::chrono::steady_clock::now();
+	float dt = std::chrono::duration<float>(now - last).count();
+	if (dt > 1.5f) {
+		std::cout << "Speed & POS_Y: " << airplane.speed << ", " << airplane.pos.y
+			<< " | Throttle: " << int(throttle * 100)
+			<< " | " << (onGround ? "ON GROUND" : "IN AIR")
+			<< std::endl;
+		last = now;
+	}
+}
+
 
 
 void drawModel(
@@ -549,14 +856,6 @@ void drawModel(
 		glDisableVertexAttribArray(sp->a("normal"));
 		glDisableVertexAttribArray(sp->a("texCoord0"));
 	}
-}
-
-void drawSphereModel() {
-	glBegin(GL_QUADS);
-	glColor3f(1.0, 0.7, 0.0);
-	glVertex3f(-1, -1, -1); glVertex3f(1, -1, -1); glVertex3f(1, 1, -1); glVertex3f(-1, 1, -1);
-	glVertex3f(-1, -1, 1); glVertex3f(1, -1, 1); glVertex3f(1, 1, 1); glVertex3f(-1, 1, 1);
-	glEnd();
 }
 
 void drawScene(GLFWwindow* window) {
@@ -632,7 +931,7 @@ void drawScene(GLFWwindow* window) {
 			glm::mat4 M = model * crossRot;
 			drawExplosionSprite(t, M);
 		}
-
+		displayFlightInfo();
 		glfwSwapBuffers(window);
 		return;
 	}
@@ -641,6 +940,8 @@ void drawScene(GLFWwindow* window) {
 	glUniformMatrix4fv(sp->u("M"), 1, GL_FALSE, glm::value_ptr(M));
 	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet,
 		countsPerMatJet, matTexIDsJet);
+
+	displayFlightInfo();
 
 	glfwSwapBuffers(window);
 }
@@ -651,7 +952,7 @@ void drawScene(GLFWwindow* window) {
 int main() {
 	glfwSetErrorCallback(error_callback);
 	if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
-	GLFWwindow* w = glfwCreateWindow(800, 600, "Symulator lotu", nullptr, nullptr);
+	GLFWwindow* w = glfwCreateWindow(1600, 1200, "Symulator lotu", nullptr, nullptr);
 	if (!w) { glfwTerminate(); return 1; }
 	glfwMakeContextCurrent(w);
 	glfwSwapInterval(1);
