@@ -819,11 +819,11 @@ void updatePhysics(float dt) {
 	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
 
 	if (!onGround && (airplane.pos.y <= airportGroundLevel + 2.0f)) {
-		// Самолет опустился на землю (посадка)
+		
 		onGround = true;
-		airplane.pos.y = airportGroundLevel + 2.0f; // Выровнять высоту
+		airplane.pos.y = airportGroundLevel + 2.0f;
 		verticalSpeed = 0.0f;
-		throttle = 0.0f; // Можно затормозить после посадки
+		throttle = 0.0f; 
 		targetThrottle = 0.0f;
 		std::cout << "Landed!" << std::endl;
 	}
@@ -943,7 +943,7 @@ void drawScene(GLFWwindow* window) {
 		float scale = 1.5f;
 
 		glm::mat4 model = glm::translate(glm::mat4(1.0f), explosionPos);
-		// Биллбординг: квадраты будут всегда стоять к камере
+
 		glm::vec3 camForward = glm::normalize(airplane.pos - camPos);
 		glm::vec3 up = glm::vec3(0, 1, 0);
 		glm::vec3 right = glm::normalize(glm::cross(up, camForward));
@@ -956,10 +956,10 @@ void drawScene(GLFWwindow* window) {
 
 		sp->use();
 
-		// Нарисовать 2 или 3 квадрата, повернутых друг к другу
-		int crossCount = 6; // Можно сделать 3 для большей плотности
+
+		int crossCount = 6;
 		for (int i = 0; i < crossCount; ++i) {
-			float angle = glm::radians(30.0f * i); // 90° между двумя, 60° если 3
+			float angle = glm::radians(30.0f * i);
 			glm::mat4 crossRot = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0, 1, 0));
 			glm::mat4 M = model * crossRot;
 			drawExplosionSprite(t, M);
