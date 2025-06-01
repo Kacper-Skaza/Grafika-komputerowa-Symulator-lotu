@@ -52,7 +52,7 @@ const float explosionDuration = 1.5f;
 GLuint explosionTexture = 0;
 const int explosionFramesX = 5;
 const int explosionFramesY = 5;
-const int explosionTotalFrames = explosionFramesX * explosionFramesY;
+const int explosionTotalFrames = explosionFramesX * explosionFramesY; 
 
 float verticalSpeed = 0.0f;
 const float GRAVITY = 9.81f;
@@ -103,12 +103,16 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 	constexpr float ANG_H = glm::radians(60.0f); // angular speed in radians/sec
 
 	if (action == GLFW_PRESS) {
-		if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_H;  // bank left
-		if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_H;  // bank right
+		if (airplane.speed > 0) {
+			if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_H;  // bank left
+			if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_H;  // bank right
+		}
 
 		if (airplane.speed >= MIN_TAKEOFF_SPEED) {
+			if (!onGround) {
+				if (key == GLFW_KEY_UP)     pitchRate = ANG_V;
+			}
 			if (key == GLFW_KEY_DOWN)   pitchRate = -ANG_V;
-			if (key == GLFW_KEY_UP)     pitchRate = ANG_V;
 		}
 	}
 	else if (action == GLFW_RELEASE) {
@@ -142,7 +146,7 @@ bool isOverAirport(const glm::vec3& posWorld) {
 }
 
 bool isOnRunway(const glm::vec3& posWorld) {
-	glm::vec3 posLocal = posWorld - airportDrawOffset;
+	glm::vec3 posLocal = posWorld - (airportCenter + airportDrawOffset);
 
 	for (const auto& box : airportRunwayAABBs) {
 		if (posLocal.x > box.min.x && posLocal.x < box.max.x &&
@@ -385,8 +389,14 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	airportCenter = (airportAABB.min + airportAABB.max) * 0.5f;
 	airportGroundLevel = airportAABB.min.y;
 
-	airplane.pos = airportCenter + airportDrawOffset + glm::vec3(0, 3.0f, 0);
-	airplane.yaw = 0.0f;
+	airportRunwayAABBs.clear();
+	airportRunwayAABBs.push_back({
+		glm::vec3(-34.04f, -0.0062f, -188.0),
+		glm::vec3(3.0f, 0.00029f, 188.0f)
+	});
+
+	airplane.pos = airportCenter + airportDrawOffset + glm::vec3(-31.23f, 3.0f, 185);
+	airplane.yaw = glm::radians(180.0f);
 	airplane.pitch = 0.0f;
 	airplane.speed = 0.0f;
 	onGround = true;
@@ -395,7 +405,7 @@ bool initOpenGLProgram(GLFWwindow* window) {
 
 	std::cout << "AIRPORT CENTER: " << airportCenter.x << " " << airportCenter.y << " " << airportCenter.z << std::endl;
 
-	matTexIDsJet.resize(materialsJet.size(), 0);
+	matTexIDsJet.resize(materialsJet.size(), 0); 
 	for (size_t i = 0; i < materialsJet.size(); i++) {
 		std::string texname = materialsJet[i].diffuse_texname;
 		auto pos = texname.find_last_of("/\\");
@@ -485,18 +495,27 @@ bool checkCollision(const glm::vec3& posWorld) {
 	glm::vec3 posLocal = posWorld - airportDrawOffset;
 
 	// 1) If the plane is on the ground AND is exactly on a runway, skip collisions.
-	if (onGround && isOnRunway(posWorld)) {
-		return false;
-	}
-
-	// 1b) If the plane is on the ground but NOT on a runway, skip obstacle checks entirely
-	//     (taxiing/parked). This prevents instant collision with airport structures.
 	if (onGround) {
-		return false;
+		if (isOnRunway(posWorld)) {
+			return false; // На полосе — ок
+		}
+		else {
+			std::cout << "posWorld: " << airplane.pos.x << " " << airplane.pos.y << " " << airplane.pos.z << std::endl;
+			std::cout << "posLocal: " << posLocal.x << " " << posLocal.y << " " << posLocal.z << std::endl;
+			for (const auto& box : airportRunwayAABBs) {
+				std::cout << "Runway X: " << box.min.x << " - " << box.max.x << " | Z: " << box.min.z << " - " << box.max.z << std::endl;
+			}
+			return true; // Не на полосе — взорвался!
+		}
 	}
 
 	// 2) If in the “safe radius” of the airport, do a more lenient check against obstacles
 	if (isOverAirport(posWorld)) {
+		std::cout << "posWorld: " << airplane.pos.x << " " << airplane.pos.y << " " << airplane.pos.z << std::endl;
+		std::cout << "posLocal: " << posLocal.x << " " << posLocal.y << " " << posLocal.z << std::endl;
+		for (const auto& box : airportRunwayAABBs) {
+			std::cout << "Runway X: " << box.min.x << " - " << box.max.x << " | Z: " << box.min.z << " - " << box.max.z << std::endl;
+		}
 		float buffer = (airplane.speed < MIN_TAKEOFF_SPEED + 5.0f) ? 8.0f : 2.0f;
 		for (const auto& box : airportObstacles) {
 			// box.min/.max are in local coords
@@ -655,8 +674,8 @@ void updatePhysics(float dt) {
 		if (explosionTimer >= explosionDuration) {
 			explosionActive = false;
 			// Reset to airport
-			airplane.pos = airportCenter + airportDrawOffset + glm::vec3(0, 3.0f, 0);
-			airplane.yaw = 0;
+			airplane.pos = airportCenter + airportDrawOffset + glm::vec3(-31.23f, 3.0f, 185);
+			airplane.yaw = glm::radians(180.0f);
 			airplane.pitch = 0;
 			currentYawRate = 0;
 			targetYawRate = 0;
@@ -702,6 +721,7 @@ void updatePhysics(float dt) {
 	// ----------- On Ground ----------
 	if (onGround || airplane.pos.y == MIN_Y) {
 		airplane.pos.y = airportGroundLevel + 2.0f;
+		currentRollAngle = glm::mix(currentRollAngle, 0.0f, 0.3f);
 		verticalSpeed = 0.0f;
 		isStalling = false;
 
@@ -798,6 +818,16 @@ void updatePhysics(float dt) {
 	airplane.pos.z = glm::clamp(airplane.pos.z, MIN_Z - boundary_buffer, MAX_Z + boundary_buffer);
 	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
 
+	if (!onGround && (airplane.pos.y <= airportGroundLevel + 2.0f)) {
+		// Самолет опустился на землю (посадка)
+		onGround = true;
+		airplane.pos.y = airportGroundLevel + 2.0f; // Выровнять высоту
+		verticalSpeed = 0.0f;
+		throttle = 0.0f; // Можно затормозить после посадки
+		targetThrottle = 0.0f;
+		std::cout << "Landed!" << std::endl;
+	}
+
 	// Only explode if really out of bounds and not near airport
 	if (outOfBounds && !isOverAirport(airplane.pos)) {
 		startExplosion(airplane.pos);
@@ -873,8 +903,11 @@ void drawScene(GLFWwindow* window) {
 	// model matrix for the airplane
 	glm::mat4 M = glm::translate(glm::mat4(1.0f), airplane.pos)
 		* glm::rotate(glm::mat4(1.0f), airplane.yaw, glm::vec3(0, 1, 0))
-		* glm::rotate(glm::mat4(1.0f), airplane.pitch, glm::vec3(1, 0, 0))
-		* glm::rotate(glm::mat4(1.0f), currentRollAngle, glm::vec3(0, 0, 1));
+		* glm::rotate(glm::mat4(1.0f), airplane.pitch, glm::vec3(1, 0, 0));
+
+	if (!onGround) {
+		M = M * glm::rotate(glm::mat4(1.0f), currentRollAngle, glm::vec3(0, 0, 1));
+	}
 
 	// recalc forward (−Z) after rotation
 	glm::vec3 forward = glm::normalize(glm::vec3(R * glm::vec4(0, 0, 1, 0)));
