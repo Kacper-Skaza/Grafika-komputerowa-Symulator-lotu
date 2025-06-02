@@ -106,7 +106,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 	constexpr float ANG_H = glm::radians(60.0f); // angular speed in radians/sec
 
 	if (action == GLFW_PRESS) {
-		if (airplane.speed > 0) {
+		if (airplane.speed > 0.1) {
 			if (key == GLFW_KEY_LEFT)   targetYawRate = ANG_H;  // bank left
 			if (key == GLFW_KEY_RIGHT)  targetYawRate = -ANG_H;  // bank right
 		}
@@ -406,8 +406,6 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	throttle = 0.0f;
 	targetThrottle = 0.0f;
 
-	std::cout << "AIRPORT CENTER: " << airportCenter.x << " " << airportCenter.y << " " << airportCenter.z << std::endl;
-
 	matTexIDsJet.resize(materialsJet.size(), 0);
 	for (size_t i = 0; i < materialsJet.size(); i++) {
 		std::string texname = materialsJet[i].diffuse_texname;
@@ -503,22 +501,12 @@ bool checkCollision(const glm::vec3& posWorld) {
 			return false; // На полосе — ок
 		}
 		else {
-			std::cout << "posWorld: " << airplane.pos.x << " " << airplane.pos.y << " " << airplane.pos.z << std::endl;
-			std::cout << "posLocal: " << posLocal.x << " " << posLocal.y << " " << posLocal.z << std::endl;
-			for (const auto& box : airportRunwayAABBs) {
-				std::cout << "Runway X: " << box.min.x << " - " << box.max.x << " | Z: " << box.min.z << " - " << box.max.z << std::endl;
-			}
 			return true; // Не на полосе — взорвался!
 		}
 	}
 
 	// 2) If in the “safe radius” of the airport, do a more lenient check against obstacles
 	if (isOverAirport(posWorld)) {
-		std::cout << "posWorld: " << airplane.pos.x << " " << airplane.pos.y << " " << airplane.pos.z << std::endl;
-		std::cout << "posLocal: " << posLocal.x << " " << posLocal.y << " " << posLocal.z << std::endl;
-		for (const auto& box : airportRunwayAABBs) {
-			std::cout << "Runway X: " << box.min.x << " - " << box.max.x << " | Z: " << box.min.z << " - " << box.max.z << std::endl;
-		}
 		float buffer = (airplane.speed < MIN_TAKEOFF_SPEED + 5.0f) ? 8.0f : 2.0f;
 		for (const auto& box : airportObstacles) {
 			// box.min/.max are in local coords
