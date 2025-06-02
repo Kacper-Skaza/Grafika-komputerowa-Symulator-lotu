@@ -2,7 +2,8 @@
 
 uniform sampler2D textureMap0;
 
-in vec4 l;
+in vec4 l_point; // punktowe
+in vec4 l_sun;   // kierunkowe
 in vec4 n;
 in vec4 v;
 in vec2 iTexCoord0;
@@ -10,17 +11,27 @@ in vec2 iTexCoord0;
 out vec4 pixelColor;
 
 void main() {
-    vec3 ml = normalize(l.xyz);
-    vec3 mn = normalize(n.xyz);
-    vec3 mv = normalize(v.xyz);
-    vec3 mr = reflect(-ml, mn);
+    vec3 N = normalize(n.xyz);
+    vec3 V = normalize(v.xyz);
 
-    float nl = clamp(dot(mn, ml), 0.0, 1.0);
-    float rv = pow(clamp(dot(mr, mv), 0.0, 1.0), 25.0);
+    // Punktowe
+    vec3 L1 = normalize(l_point.xyz);
+    vec3 R1 = reflect(-L1, N);
+    float diff1 = max(dot(N, L1), 0.0);
+    float spec1 = pow(max(dot(R1, V), 0.0), 25.0);
+
+    // Kierunkowe
+    vec3 L2 = normalize(l_sun.xyz);
+    vec3 R2 = reflect(-L2, N);
+    float diff2 = max(dot(N, L2), 0.0);
+    float spec2 = pow(max(dot(R2, V), 0.0), 25.0);
 
     vec4 kd = texture(textureMap0, iTexCoord0);
     vec4 ks = kd * 0.5;
 
     vec4 ambient = 0.3 * kd;
-    pixelColor = ambient + vec4(nl * kd.rgb, kd.a) + vec4(ks.rgb * rv, 0.0);
+    vec4 diffuse = kd * (diff1 + diff2);
+    vec4 specular = ks * (spec1 + spec2);
+
+    pixelColor = ambient + diffuse + vec4(specular.rgb, kd.a);
 }

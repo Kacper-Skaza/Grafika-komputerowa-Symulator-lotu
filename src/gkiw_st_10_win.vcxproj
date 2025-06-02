@@ -24,6 +24,7 @@
     <ClInclude Include="shaderprogram.h" />
     <ClInclude Include="myCube.h" />
     <ClInclude Include="myTeapot.h" />
+    <ClInclude Include="stb_easy_font.h" />
     <ClInclude Include="tiny_obj_loader.h" />
   </ItemGroup>
   <ItemGroup>

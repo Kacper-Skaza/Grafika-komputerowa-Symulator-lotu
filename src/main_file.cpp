@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <tiny_obj_loader.h>
+#include <stb_easy_font.h>
+
 #include "constants.h"
 #include "lodepng.h"
 #include "shaderprogram.h"
@@ -15,6 +17,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <chrono>
 #include <unordered_map>
 
 ShaderProgram* sp = nullptr;
@@ -52,7 +55,7 @@ const float explosionDuration = 1.5f;
 GLuint explosionTexture = 0;
 const int explosionFramesX = 5;
 const int explosionFramesY = 5;
-const int explosionTotalFrames = explosionFramesX * explosionFramesY; 
+const int explosionTotalFrames = explosionFramesX * explosionFramesY;
 
 float verticalSpeed = 0.0f;
 const float GRAVITY = 9.81f;
@@ -393,7 +396,7 @@ bool initOpenGLProgram(GLFWwindow* window) {
 	airportRunwayAABBs.push_back({
 		glm::vec3(-34.04f, -0.0062f, -188.0),
 		glm::vec3(3.0f, 0.00029f, 188.0f)
-	});
+		});
 
 	airplane.pos = airportCenter + airportDrawOffset + glm::vec3(-31.23f, 3.0f, 185);
 	airplane.yaw = glm::radians(180.0f);
@@ -405,7 +408,7 @@ bool initOpenGLProgram(GLFWwindow* window) {
 
 	std::cout << "AIRPORT CENTER: " << airportCenter.x << " " << airportCenter.y << " " << airportCenter.z << std::endl;
 
-	matTexIDsJet.resize(materialsJet.size(), 0); 
+	matTexIDsJet.resize(materialsJet.size(), 0);
 	for (size_t i = 0; i < materialsJet.size(); i++) {
 		std::string texname = materialsJet[i].diffuse_texname;
 		auto pos = texname.find_last_of("/\\");
@@ -819,11 +822,11 @@ void updatePhysics(float dt) {
 	airplane.pos.y = glm::clamp(airplane.pos.y, MIN_Y, MAX_Y);
 
 	if (!onGround && (airplane.pos.y <= airportGroundLevel + 2.0f)) {
-		
+
 		onGround = true;
 		airplane.pos.y = airportGroundLevel + 2.0f;
 		verticalSpeed = 0.0f;
-		throttle = 0.0f; 
+		throttle = 0.0f;
 		targetThrottle = 0.0f;
 		std::cout << "Landed!" << std::endl;
 	}
@@ -842,7 +845,18 @@ void updatePhysics(float dt) {
 }
 
 
-#include <chrono>
+
+void drawText(float x, float y, const char* text, float r, float g, float b) {
+	static char buffer[99999]; // duży bufor na wierzchołki
+	int num_quads = stb_easy_font_print(x, y, (char*)text, nullptr, buffer, sizeof(buffer));
+
+	glColor3f(r, g, b);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 16, buffer);
+	glDrawArrays(GL_QUADS, 0, num_quads * 4);
+	glDisableClientState(GL_VERTEX_ARRAY);
+}
+
 void displayFlightInfo() {
 	static auto last = std::chrono::steady_clock::now();
 	auto now = std::chrono::steady_clock::now();
@@ -854,6 +868,58 @@ void displayFlightInfo() {
 			<< std::endl;
 		last = now;
 	}
+}
+
+void drawOverlay() {
+	// Ustaw tryb 2D
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+
+	int w, h;
+	glfwGetFramebufferSize(glfwGetCurrentContext(), &w, &h);
+	glOrtho(0, w, h, 0, -1, 1); // (0,0) w lewym górnym rogu
+
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	// Rysowanie tła (prostokąt)
+	glColor4f(0.0f, 0.0f, 0.0f, 0.5f); // półprzezroczysty czarny
+	float boxW = 200, boxH = 50;
+	glBegin(GL_QUADS);
+	glVertex2f(10, 10);
+	glVertex2f(10 + boxW, 10);
+	glVertex2f(10 + boxW, 10 + boxH);
+	glVertex2f(10, 10 + boxH);
+	glEnd();
+
+	// Rysowanie tekstu
+	char buf[64];
+	snprintf(buf, sizeof(buf), "Throttle: %.1f %%", throttle * 100.0f);
+	if (isStalling && !onGround)
+		drawText(20, 21, buf, 1.0f, 0.0f, 0.0f);
+	else
+		drawText(20, 21, buf, 1.0f, 1.0f, 1.0f);
+
+	if (airplane.pos.y > 1.05f)
+		snprintf(buf, sizeof(buf), "Altitude: %.1f m", airplane.pos.y * 15.0f - 15.2f);
+	else
+		snprintf(buf, sizeof(buf), "Altitude: 0.0 m");
+	drawText(20, 41, buf, 1.0f, 1.0f, 1.0f);
+
+	// Przywrócenie stanu
+	glDisable(GL_BLEND);
+	glEnable(GL_DEPTH_TEST);
+
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
 }
 
 
@@ -921,12 +987,14 @@ void drawScene(GLFWwindow* window) {
 		aspectRatio,
 		0.1f, 2000.0f);
 
-	// Sun
-	glUniform4f(sp->u("lp"), -1.0f, 1.0f, -0.5f, 0.0f);
-
+	// SP <- IMPORTANT
 	sp->use();
 	glUniformMatrix4fv(sp->u("P"), 1, GL_FALSE, glm::value_ptr(P));
 	glUniformMatrix4fv(sp->u("V"), 1, GL_FALSE, glm::value_ptr(V));
+
+	// Light
+	glUniform4f(sp->u("sun"), -1.0f, 1.0f, -0.5f, 0.0f);
+	glUniform4f(sp->u("lp"), 0.0f, 0.0f, -10.0f, 1.0f);
 
 	// draw City.obj
 	glm::mat4 I(1.0f);
@@ -974,9 +1042,13 @@ void drawScene(GLFWwindow* window) {
 	drawModel(vertsPerMatJet, normsPerMatJet, uvsPerMatJet,
 		countsPerMatJet, matTexIDsJet);
 
-	displayFlightInfo();
+	glUseProgram(0);
+	drawOverlay();
 
 	glfwSwapBuffers(window);
+
+	// DEBUG ONLY
+	// displayFlightInfo();
 }
 
 
@@ -985,7 +1057,13 @@ void drawScene(GLFWwindow* window) {
 int main() {
 	glfwSetErrorCallback(error_callback);
 	if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
-	GLFWwindow* w = glfwCreateWindow(1600, 1200, "Symulator lotu", nullptr, nullptr);
+
+	int width = 1600;
+	int height = 900;
+	GLFWwindow* w = glfwCreateWindow(width, height, "Symulator lotu", nullptr, nullptr);
+	glViewport(0, 0, width, height);
+	aspectRatio = float(width) / float(height);
+
 	if (!w) { glfwTerminate(); return 1; }
 	glfwMakeContextCurrent(w);
 	glfwSwapInterval(1);
